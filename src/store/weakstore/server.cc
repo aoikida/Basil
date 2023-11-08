@@ -53,6 +53,14 @@ Server::ReceiveMessage(const TransportAddress &remote,
 }
 
 void
+Server::ReceiveMessage_batch(const TransportAddress &remote,
+                       const std::vector<std::string> &types, const std::vector<std::string> &datas,
+                       void *meta_data)
+{
+    //HandleMessage(remote, type, data);
+}
+
+void
 Server::HandleMessage(const TransportAddress &remote,
                       const string &type, const string &data)
 {

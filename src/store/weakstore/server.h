@@ -61,6 +61,10 @@ public:
                         const std::string &type, const std::string &data,
                         void *meta_data) override;
 
+    virtual void ReceiveMessage_batch(const TransportAddress &remote,
+                        const std::vector<std::string> &types, const std::vector<std::string> &datas,
+                        void *meta_data) override;
+
     void HandleMessage(const TransportAddress &remote,
                         const std::string &type, const std::string &data);
     void HandleGet(const TransportAddress &remote,

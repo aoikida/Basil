@@ -36,6 +36,8 @@ public:
     // Overriding from TransportReceiver
     void ReceiveMessage(const TransportAddress &remote, const std::string &type, const std::string &data, void *meta_data);
 
+    void ReceiveMessage_batch(const TransportAddress &remote, const std::vector<std::string> &types, const std::vector<std::string> &datas, void *meta_data);
+
 private:
     transport::Configuration *config;
     Transport *transport;  // Transport to replicas
