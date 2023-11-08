@@ -44,7 +44,8 @@ void ThreadPool::start(int process_id, int total_processes, bool hyperthreading,
     fprintf(stderr, "process_id: %d, total_processes: %d \n", process_id, total_processes);
     //TODO: add config param for hyperthreading
     //bool hyperthreading = true;
-    int num_cpus = 8; //std::thread::hardware_concurrency(); ///(2-hyperthreading);
+    // サーバのCPUの数をここに記載する
+    int num_cpus = 4;//std::thread::hardware_concurrency(); ///(2-hyperthreading);
     fprintf(stderr, "Num_cpus: %d \n", num_cpus);
     num_cpus /= total_processes;
     int offset = process_id * num_cpus;
@@ -136,9 +137,11 @@ void ThreadPool::start(int process_id, int total_processes, bool hyperthreading,
       std::cerr << "Trying to pin to core: " << i << " + " << offset << std::endl;
       int rc = pthread_setaffinity_np(t->native_handle(),
                                       sizeof(cpu_set_t), &cpuset);
+      
       if (rc != 0) {
           Panic("Error calling pthread_setaffinity_np: %d", rc);
       }
+      
       Debug("MainThread running on CPU %d.", sched_getcpu());
       threads.push_back(t);
       t->detach();
@@ -149,7 +152,7 @@ void ThreadPool::start(int process_id, int total_processes, bool hyperthreading,
     int num_cpus = std::thread::hardware_concurrency(); ///(2-hyperthreading);
     fprintf(stderr, "Num_cpus: %d \n", num_cpus);
     num_cpus /= total_processes;
-    num_cpus = 8; //XXX change back to dynamic
+    //num_cpus = 8; //XXX change back to dynamic 
     //int offset = process_id * num_cpus;
     Debug("num cpus %d", num_cpus);
     uint32_t num_threads = (uint32_t) std::max(1, num_cpus);
@@ -185,12 +188,13 @@ void ThreadPool::start(int process_id, int total_processes, bool hyperthreading,
           }
         }
       });
-      cpu_set_t cpuset;
-      CPU_ZERO(&cpuset);
-      CPU_SET(i, &cpuset);
+      cpu_set_t cpuset; //cpuset : CPU集合を表す変数
+      CPU_ZERO(&cpuset); //cpusetの初期化
+      CPU_SET(i, &cpuset); //i(スレッドの) : 使用するCPU
       int rc = pthread_setaffinity_np(t->native_handle(),
                                       sizeof(cpu_set_t), &cpuset);
       if (rc != 0) {
+          //ここに注意、必ず何が起きているか理解すること
           Panic("Error calling pthread_setaffinity_np: %d", rc);
       }
       Debug("MainThread running on CPU %d.", sched_getcpu());

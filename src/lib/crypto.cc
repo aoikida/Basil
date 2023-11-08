@@ -227,9 +227,10 @@ bool Verify(PubKey* publicKey, const char *message, size_t messageLen,
 
       unsigned char * testMsg = (unsigned char*) &message[0];
       //int len = static_cast<int>(messageLen);
+      //メッセージの署名の正しさを検証できた場合、結果は0となり、失敗の場合-1を返す。
+      //失敗する原因の一つとしてserverとclientが使用する公開鍵が違うということがある。
+      // 0 == 0ならばtrueを返すため、resはtrueとなる。
       bool res = ed25519_sign_open(testMsg, messageLen, *publicKey->donnaKey, (unsigned char*) signature) == 0;
-      //std::cout << "VERIFY TEST:" << res << std::endl;
-
       return res;
     }
 

@@ -67,6 +67,14 @@ public:
     }
 
     virtual bool
+    SendMessage_batch(TransportReceiver *src, const TransportAddress &dst,
+                const std::vector<Message *> &m_list) override
+    {
+        const ADDR &dstAddr = dynamic_cast<const ADDR &>(dst);
+        return SendMessageInternal_batch(src, dstAddr, m_list);
+    }
+
+    virtual bool
     SendMessageToReplica(TransportReceiver *src,
                          int replicaIdx,
                          const Message &m) override
@@ -81,7 +89,8 @@ public:
                          int groupIdx,
                          int replicaIdx,
                          const Message &m) override
-    {
+    {   
+        Debug("SendMessageToReplica");
         const transport::Configuration *cfg = configurations[src];
         UW_ASSERT(cfg != NULL);
 
@@ -93,9 +102,36 @@ public:
 
         auto kv = replicaAddresses[cfg][groupIdx].find(replicaIdx);
         UW_ASSERT(kv != replicaAddresses[cfg][groupIdx].end());
-
         return SendMessageInternal(src, kv->second, m);
+        
+
     }
+
+    
+    virtual bool
+    SendMessageToReplica_batch(TransportReceiver *src,
+                         int groupIdx,
+                         int replicaIdx,
+                         const std::vector<Message *> &m_list) override
+    {   
+        Debug("SendMessageToReplica_batch");
+        const transport::Configuration *cfg = configurations[src];
+        UW_ASSERT(cfg != NULL);
+
+        //mtx.lock();
+        if (!replicaAddressesInitialized) {
+            LookupAddresses();
+        }
+        //mtx.unlock();
+
+        auto kv = replicaAddresses[cfg][groupIdx].find(replicaIdx);
+        UW_ASSERT(kv != replicaAddresses[cfg][groupIdx].end());
+        return SendMessageInternal_batch(src, kv->second, m_list);
+        
+    }
+    
+
+    
 
     virtual bool SendMessageToFC(TransportReceiver *src, const Message &m) override
     {
@@ -170,6 +206,16 @@ public:
     }
 
     virtual bool
+    SendMessageToGroup_batch(TransportReceiver *src,
+                       int groupIdx,
+                       const std::vector<Message *> &m_list) override
+        
+    {   
+        return SendMessageToGroups_batch(src, std::vector<int>{groupIdx}, m_list);
+    }
+
+
+    virtual bool
     SendMessageToGroups(TransportReceiver *src,
                         const std::vector<int> &groups,
                         const Message &m) override
@@ -208,6 +254,44 @@ public:
     }
 
     virtual bool
+    SendMessageToGroups_batch(TransportReceiver *src,
+                        const std::vector<int> &groups,
+                        const std::vector<Message *> &m_list) override
+    {   
+        const transport::Configuration *cfg = configurations[src];
+        UW_ASSERT(cfg != NULL);
+
+        //mtx.lock();
+        if (!replicaAddressesInitialized) {
+            LookupAddresses();
+        }
+        //mtx.unlock();
+
+        int srcGroup = -1;
+        auto replicaGroupsItr = replicaGroups.find(src);
+        if (replicaGroupsItr != replicaGroups.end()) {
+          srcGroup = replicaGroupsItr->second;
+        }
+
+        const ADDR *srcAddr;
+        if (srcGroup != -1) {
+          srcAddr = dynamic_cast<const ADDR *>(src->GetAddress());
+        }
+
+        for (int groupIdx : groups) {
+            for (auto & kv : replicaAddresses[cfg][groupIdx]) {
+                if (srcGroup != -1 && *srcAddr == kv.second) {
+                    continue;
+                }
+                if (!SendMessageInternal_batch(src, kv.second, m_list)) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    virtual bool
     OrderedMulticast(TransportReceiver *src,
                      const std::vector<int> &groups,
                      const Message &m) override
@@ -229,6 +313,12 @@ protected:
     virtual bool SendMessageInternal(TransportReceiver *src,
                                      const ADDR &dst,
                                      const Message &m) = 0;
+
+    virtual bool SendMessageInternal_batch(TransportReceiver *src,
+                                     const ADDR &dst,
+                                     const std::vector<Message *> &m_list) = 0;
+    
+
     virtual ADDR LookupAddress(const transport::Configuration &cfg,
                                int groupIdx,
                                int replicaIdx) = 0;

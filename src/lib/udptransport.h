@@ -75,6 +75,10 @@ public:
                           const transport::Configuration &config,
                           int groupIdx,
                           int replicaIdx) override;
+    virtual void Register_batch(TransportReceiver *receiver,
+                          const transport::Configuration &config,
+                          int groupIdx,
+                          int replicaIdx) override;
     virtual bool OrderedMulticast(TransportReceiver *src,
                                   const std::vector<int> &groups,
                                   const Message &m) override;
@@ -147,6 +151,16 @@ private:
     bool SendMessageInternal(TransportReceiver *src,
                              const UDPTransportAddress &dst,
                              const Message &m) override;
+
+    bool _SendMessageInternal_batch(TransportReceiver *src,
+                              const UDPTransportAddress &dst,
+                              const std::vector<Message *>& m_list,
+                              size_t meta_len,
+                              void *meta_data);
+    
+    bool SendMessageInternal_batch(TransportReceiver *src,
+                             const UDPTransportAddress &dst,
+                             const std::vector<Message *> &m_list) override;
 
     UDPTransportAddress
     LookupAddress(const transport::ReplicaAddress &addr);

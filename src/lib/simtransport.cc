@@ -253,7 +253,7 @@ SimulatedTransport::RemoveFilter(int id)
 
 int
 SimulatedTransport::Timer(uint64_t ms, timer_callback_t cb)
-{
+{   
     ++lastTimerId;
     int id = lastTimerId;
     PendingTimer t;

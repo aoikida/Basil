@@ -81,6 +81,10 @@ public:
                   const transport::Configuration &config,
                   int groupIdx,
                   int replicaIdx) override;
+    virtual void Register_batch(TransportReceiver *receiver,
+                  const transport::Configuration &config,
+                  int groupIdx,
+                  int replicaIdx) override;
     virtual bool OrderedMulticast(TransportReceiver *src,
         const std::vector<int> &groups, const Message &m) override;
 
@@ -148,9 +152,17 @@ private:
 
     bool stopped;
 
+
     virtual bool SendMessageInternal(TransportReceiver *src,
                              const TCPTransportAddress &dst,
                              const Message &m) override;
+    
+
+    //追加
+    virtual bool SendMessageInternal_batch(TransportReceiver *src,
+                                  const TCPTransportAddress &dst,
+                                  const std::vector<Message *> &m_list) override;
+
     virtual const TCPTransportAddress *
     LookupMulticastAddress(const transport::Configuration*config) override {
       return nullptr;
@@ -162,6 +174,8 @@ private:
     }
 
     void ConnectTCP(const std::pair<TCPTransportAddress, TransportReceiver *> &dstSrc);
+    //追加
+    void ConnectTCP_batch(const std::pair<TCPTransportAddress, TransportReceiver *> &dstSrc);
     void OnTimer(TCPTransportTimerInfo *info);
     static void TimerCallback(evutil_socket_t fd,
                               short what, void *arg);
@@ -171,7 +185,14 @@ private:
                                short what, void *arg);
     static void TCPAcceptCallback(evutil_socket_t fd, short what,
                                   void *arg);
+    //追加
+    static void TCPAcceptCallback_batch(evutil_socket_t fd, short what,
+                                  void *arg);
+
     static void TCPReadableCallback(struct bufferevent *bev,
+                                    void *arg);
+    //追加
+    static void TCPReadableCallback_batch(struct bufferevent *bev,
                                     void *arg);
     static void TCPEventCallback(struct bufferevent *bev,
                                  short what, void *arg);

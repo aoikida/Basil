@@ -207,6 +207,10 @@ public:
                   const transport::Configuration &config,
                   int groupIdx,
                   int replicaIdx) override;
+    virtual void Register_batch(TransportReceiver *receiver,
+                  const transport::Configuration &config,
+                  int groupIdx,
+                  int replicaIdx) override;
     virtual int Timer(uint64_t ms, timer_callback_t cb) override;
     virtual int TimerMicro(uint64_t ms, timer_callback_t cb) override {
       return Timer(0, cb);
@@ -239,6 +243,10 @@ public:
 protected:
     virtual bool SendMessageInternal(TransportReceiver *src,
                              const ReplTransportAddress &dst, const Message &m) override;
+
+    virtual bool SendMessageInternal_batch(TransportReceiver *src,
+                                  const ReplTransportAddress &dst,
+                                  const std::vector<Message *> &m_list) override; 
     virtual ReplTransportAddress
     LookupAddress(const transport::Configuration &cfg,
                   int groupIdx,

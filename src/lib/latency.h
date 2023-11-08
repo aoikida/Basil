@@ -112,7 +112,7 @@ bool Latency_TryGet(const ::transport::latency::format::Latency &in,
 
 static inline void
 Latency_Start(Latency_t *l)
-{
+{   
     Latency_StartRec(l, &l->defaultFrame);
 }
 
@@ -130,7 +130,7 @@ Latency_EndType(Latency_t *l, char type)
 
 static inline uint64_t
 Latency_End(Latency_t *l)
-{
+{   
     return Latency_EndRec(l, &l->defaultFrame);
 }
 

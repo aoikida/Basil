@@ -488,6 +488,12 @@ UDPTransport::Register(TransportReceiver *receiver,
     }
 }
 
+void
+UDPTransport::Register_batch(TransportReceiver *receiver,
+                       const transport::Configuration &config,
+                       int groupIdx,
+                       int replicaIdx){}
+
 static size_t
 SerializeMessage(const string &data, const string &type,
                  char **out, size_t meta_len, void *meta_data)
@@ -613,6 +619,90 @@ UDPTransport::SendMessageInternal(TransportReceiver *src,
 }
 
 bool
+UDPTransport::_SendMessageInternal_batch(TransportReceiver *src,
+                                   const UDPTransportAddress &dst,
+                                   const std::vector<Message *> &m_list,
+                                   size_t meta_len,
+                                   void *meta_data)
+{
+    /* 今は寝かしとく
+    sockaddr_in sin = dynamic_cast<const UDPTransportAddress &>(dst).addr;
+
+    // Serialize message
+    char *buf;
+    string data, type;
+    data = m.SerializeAsString();
+    type = m.GetTypeName();
+    size_t msgLen = SerializeMessage(data,
+                                     type,
+                                     &buf,
+                                     meta_len,
+                                     meta_data);
+
+    int fd = fds[src];
+
+    // XXX All of this assumes that the socket is going to be
+    // available for writing, which since it's a UDP socket it ought
+    // to be.
+    if (msgLen <= MAX_UDP_MESSAGE_SIZE) {
+        if (sendto(fd, buf, msgLen, 0,
+                   (sockaddr *)&sin, sizeof(sin)) < 0) {
+            PWarning("Failed to send message");
+            goto fail;
+        }
+    } else {
+        msgLen -= sizeof(uint32_t);
+        char *bodyStart = buf + sizeof(uint32_t);
+        int numFrags = ((msgLen - 1) / MAX_UDP_MESSAGE_SIZE) + 1;
+        Notice("Sending large %s message in %d fragments",
+               type.c_str(), numFrags);
+        uint64_t msgId = ++lastFragMsgId;
+        for (size_t fragStart = 0; fragStart < msgLen;
+                fragStart += MAX_UDP_MESSAGE_SIZE) {
+            size_t fragLen = std::min(msgLen - fragStart,
+                                      MAX_UDP_MESSAGE_SIZE);
+            size_t fragHeaderLen = 2 * sizeof(size_t) + sizeof(uint64_t) + sizeof(uint32_t);
+            char fragBuf[fragLen + fragHeaderLen];
+            char *ptr = fragBuf;
+            *((uint32_t *)ptr) = FRAG_MAGIC;
+            ptr += sizeof(uint32_t);
+            *((uint64_t *)ptr) = msgId;
+            ptr += sizeof(uint64_t);
+            *((size_t *)ptr) = fragStart;
+            ptr += sizeof(size_t);
+            *((size_t *)ptr) = msgLen;
+            ptr += sizeof(size_t);
+            memcpy(ptr, &bodyStart[fragStart], fragLen);
+
+            if (sendto(fd, fragBuf, fragLen + fragHeaderLen, 0,
+                       (sockaddr *)&sin, sizeof(sin)) < 0) {
+                PWarning("Failed to send message fragment %ld",
+                         fragStart);
+                goto fail;
+            }
+        }
+    }
+
+    delete [] buf;
+    return true;
+
+fail:
+    delete [] buf;
+    return false;
+
+    */
+}
+
+bool
+UDPTransport::SendMessageInternal_batch(TransportReceiver *src,
+                                  const UDPTransportAddress &dst,
+                                  const std::vector<Message *> &m_list)
+{
+    return _SendMessageInternal_batch(src, dst, m_list, 0, NULL);
+}
+
+
+bool
 UDPTransport::OrderedMulticast(TransportReceiver *src,
                                const std::vector<int> &groups,
                                const Message &m)
@@ -658,7 +748,8 @@ UDPTransport::OrderedMulticast(TransportReceiver *src,
 
 void
 UDPTransport::Run()
-{
+{   //libeventBaseと名前の付いたeventBase構造体を実行し続ける.
+    //libeventBaseを調べる
     event_base_dispatch(libeventBase);
 }
 

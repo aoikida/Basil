@@ -61,6 +61,11 @@ public:
                                 const string &type,
                                 const string &data,
                                 void * meta_data) = 0;
+    
+    virtual void ReceiveMessage_batch(const TransportAddress &remote,
+                                const std::vector<std::string> &types,
+                                const std::vector<std::string> &datas,
+                                void * meta_data) = 0;
 
 protected:
     const TransportAddress *myAddress;
@@ -85,10 +90,19 @@ public:
                           const transport::Configuration &config,
                           int groupIdx,
                           int replicaIdx) = 0;
+    
+    virtual void Register_batch(TransportReceiver *receiver,
+                          const transport::Configuration &config,
+                          int groupIdx,
+                          int replicaIdx) = 0;
 
     virtual bool SendMessage(TransportReceiver *src,
                              const TransportAddress &dst,
                              const Message &m) = 0;
+
+    virtual bool SendMessage_batch(TransportReceiver *src,
+                             const TransportAddress &dst,
+                             const std::vector<Message *> &m_list) = 0;
     /* Send message to a replica in the local/default(0) group */
     virtual bool SendMessageToReplica(TransportReceiver *src,
                                       int replicaIdx,
@@ -98,6 +112,12 @@ public:
                                       int groupIdx,
                                       int replicaIdx,
                                       const Message &m) = 0;
+    //追加
+    virtual bool SendMessageToReplica_batch(TransportReceiver *src,
+                                      int groupIdx,
+                                      int replicaIdx,
+                                      const std::vector<Message *> &m_list) = 0;
+    
     /* Send message to all replicas in the local/default(0) group */
     virtual bool SendMessageToAll(TransportReceiver *src,
                                   const Message &m) = 0;
@@ -108,10 +128,16 @@ public:
     virtual bool SendMessageToGroups(TransportReceiver *src,
                                      const std::vector<int> &groups,
                                      const Message &m) = 0;
+    virtual bool SendMessageToGroups_batch(TransportReceiver *src,
+                                    const std::vector<int> &groups,
+                                    const std::vector<Message *> &m_list) = 0;
     /* Send message to all replicas in a single group */
     virtual bool SendMessageToGroup(TransportReceiver *src,
                                     int groupIdx,
                                     const Message &m) = 0;
+    virtual bool SendMessageToGroup_batch(TransportReceiver *src,
+                                    int groupIdx,
+                                    const std::vector<Message *> &m_list) = 0;
     /* Send multi-group message using ordered multicast.
      * An implementation may decide not to implement this.
      */

@@ -107,6 +107,11 @@ void ReplTransport::Register(TransportReceiver *receiver,
     RegisterConfiguration(receiver, config, groupIdx, replicaIdx);
 }
 
+void ReplTransport::Register_batch(TransportReceiver *receiver,
+                             const transport::Configuration &config,
+                             int groupIdx,
+                             int replicaIdx) {}
+
 int ReplTransport::Timer(uint64_t ms, timer_callback_t cb) {
     timer_id_++;
     UW_ASSERT(timers_.count(timer_id_) == 0);
@@ -279,6 +284,12 @@ bool ReplTransport::SendMessageInternal(TransportReceiver *src,
     msg->CheckTypeAndMergeFrom(m);
     receivers_[dst].msgs.push_back(QueuedMessage(repl_addr, std::move(msg)));
     return true;
+}
+
+bool ReplTransport::SendMessageInternal_batch(TransportReceiver *src,
+                                  const ReplTransportAddress &dst,
+                                  const std::vector<Message *> &m_list) {
+// 空
 }
 
 ReplTransportAddress ReplTransport::LookupAddress(
