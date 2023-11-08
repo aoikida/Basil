@@ -48,6 +48,8 @@ class Stats {
   void ExportJSON(const std::string &file);
   void Merge(const Stats &other);
 
+  void Output(double time);
+
  private:
   std::mutex mtx;
   std::unordered_map<std::string, int64_t> statInts;

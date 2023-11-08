@@ -168,3 +168,57 @@ void Stats::Merge(const Stats &other) {
         lol.second.end());
   }
 }
+
+void Stats::Output(double time){
+  double throughput;
+  std::cout << "{" << std::endl;
+  for (auto itr = statInts.begin(); itr != statInts.end(); ++itr) {
+    if (itr->first == "total_commit_honest"){
+      throughput = itr->second / time;
+    }
+    std::cout << "    \"" << itr->first << "\": " << itr->second;
+    if (std::next(itr) != statInts.end() || statLists.size() > 0 ||
+        statIncLists.size() > 0 || statLoLs.size() > 0) {
+        std::cout << ",";
+    }
+    std::cout << std::endl;
+  }
+  for (auto itr = statLists.begin(); itr != statLists.end(); ++itr) {
+    Notice("Writing stat list %s of length %lu.", itr->first.c_str(),
+        itr->second.size());
+    std::cout << "    \"" << itr->first << "\": [";
+    for (auto jtr = itr->second.begin(); jtr != itr->second.end(); ++jtr) {
+      std::cout << *jtr;
+      if (std::next(jtr) != itr->second.end()) {
+        std::cout << ", ";
+      }
+    }
+    std::cout << "]";
+    if (std::next(itr) != statLists.end() || statIncLists.size() > 0 ||
+        statLoLs.size() > 0) {
+      std::cout << ",";
+    }
+    std::cout << std::endl;
+  }
+  for (auto itr = statIncLists.begin(); itr != statIncLists.end(); ++itr) {
+    Notice("Writing stat list %s of length %lu.", itr->first.c_str(),
+        itr->second.size());
+    std::cout << "    \"" << itr->first << "\": [";
+    for (auto jtr = itr->second.begin(); jtr != itr->second.end(); ++jtr) {
+      std::cout << *jtr;
+      if (std::next(jtr) != itr->second.end()) {
+        std::cout << ", ";
+      }
+    }
+    std::cout << "]";
+    if (std::next(itr) != statIncLists.end() || statLoLs.size() > 0) {
+      std::cout << ",";
+    }
+    std::cout << std::endl;
+  }
+
+  std::cout << "Throughput : " << throughput << std::endl;
+
+  std::cout << "}" << std::endl;
+}
+
