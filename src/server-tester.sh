@@ -2,14 +2,15 @@
 
 F=0
 NUM_GROUPS=1
-CONFIG="shard-r1.config"
+CONFIG="shard-r0.config"
 PROTOCOL="indicus"
 STORE=${PROTOCOL}store
 DURATION=10
-ZIPF=0.0
-NUM_OPS_TX=2
-NUM_KEYS_IN_DB=1
-KEY_PATH="keys"
+ZIPF=0.00
+NUM_OPS_TX=10
+NUM_KEYS_IN_DB=100000
+KEY_PATH="/usr/local/etc/indicus-keys/donna"
+BATCH_SIZE=64
 
 
 
@@ -29,6 +30,8 @@ done
 
 N=$((5*$F+1))
 
+<< COMMENTOUT
+
 echo '[1] Shutting down possibly open servers'
 for j in `seq 0 $((NUM_GROUPS-1))`; do
 	for i in `seq 0 $((N-1))`; do
@@ -38,11 +41,25 @@ for j in `seq 0 $((NUM_GROUPS-1))`; do
 done;
 killall store/server
 
+
+COMMENTOUT
+
 echo '[2] Starting new servers'
+echo 'NUM_GROUPS-1 : '$((NUM_GROUPS-1)) 
+echo 'N-1 : ' $((N-1))
 for j in `seq 0 $((NUM_GROUPS-1))`; do
-	#echo Starting Group $j
+	#echo 'Starting Group' $j
 	for i in `seq 0 $((N-1))`; do
-		#echo Starting Replica $(($i+$j*$N))
-		DEBUG=store/$STORE/* store/server --config_path $CONFIG --group_idx $j --num_groups $GROUPS --num_shards $GROUPS --replica_idx $i --protocol $PROTOCOL --num_keys $NUM_KEYS_IN_DB --debug_stats --indicus_key_path $KEY_PATH &> server$(($i+$j*$N)).out &
+		 echo 'Starting Replica' $i
+		 #DEBUG=store/indicusstore/*
+		  store/server --config_path $CONFIG --group_idx $j \
+		  --num_groups $NUM_GROUPS --num_shards $NUM_GROUPS --replica_idx $i --protocol $PROTOCOL \
+			--num_keys $NUM_KEYS_IN_DB --zipf_coefficient $ZIPF --num_ops $NUM_OPS_TX --indicus_key_path $KEY_PATH &> server3.out
 	done;
 done;
+
+#DEBUG=store/indicusstore/* store/server --config_path shard-r0.config --group_idx 0 --num_groups 1 --num_shards 1 --replica_idx 0 --protocol indicus --num_keys 10000000 --zipf_coefficient 0.9 --num_ops 10 --indicus_key_path /usr/local/etc/indicus-keys/donna &> server.out
+
+
+#src/store/server.ccを実行している
+#store
