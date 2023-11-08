@@ -46,6 +46,9 @@ AsyncPayment::~AsyncPayment() {
 
 Operation AsyncPayment::GetNextOperation(size_t outstandingOpCount, size_t finishedOpCount,
   std::map<std::string, std::string> readValues) {
+  
+
+  
   if (finishedOpCount == 0) {
     Debug("Amount: %u", h_amount);
     Debug("Warehouse: %u", w_id);
@@ -54,6 +57,10 @@ Operation AsyncPayment::GetNextOperation(size_t outstandingOpCount, size_t finis
     std::string w_key = WarehouseRowKey(w_id);
     auto w_row_itr = readValues.find(w_key);
     UW_ASSERT(w_row_itr != readValues.end());
+
+    //ここが原因でエラーが発生している。原因はdataが入ったファイルを読み込めていなかったから。server.ccで設定もしくは、configファイルで設定する。
+    //Can't parse message of type "tpcc.WarehouseRow" because it is missing required fields: 
+    //id, name, street_1, street_2, city, state, zip, tax, ytd
     UW_ASSERT(w_row.ParseFromString(w_row_itr->second));
 
     w_row.set_ytd(w_row.ytd() + h_amount);
@@ -155,5 +162,12 @@ Operation AsyncPayment::GetNextOperation(size_t outstandingOpCount, size_t finis
     }
   }
   }
+
+  Operation AsyncPayment::GetNextOperation_ycsb(size_t outstandingOpCount, size_t finishedOpCount,
+      std::map<std::string, std::string> readValues, Xoroshiro128Plus &rnd, FastZipf &zipf){}
+
+  Operation AsyncPayment::GetNextOperation_batch(size_t outstandingOpCount, size_t finishedOpCount,
+    std::map<std::string, std::string> readValues, int batchSize, Xoroshiro128Plus &rnd, FastZipf &zipf){}
+
 }
 

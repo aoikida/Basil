@@ -72,4 +72,11 @@ Operation AsyncDelivery::GetNextOperation(size_t outstandingOpCount, size_t fini
   }
 }
 
+Operation AsyncDelivery::GetNextOperation_ycsb(size_t outstandingOpCount, size_t finishedOpCount,
+      std::map<std::string, std::string> readValues, Xoroshiro128Plus &rnd, FastZipf &zipf){}
+
+Operation AsyncDelivery::GetNextOperation_batch(size_t outstandingOpCount, size_t finishedOpCount,
+  std::map<std::string, std::string> readValues, int batchSize, Xoroshiro128Plus &rnd, FastZipf &zipf) {}
+
+
 }

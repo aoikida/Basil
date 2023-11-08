@@ -77,6 +77,10 @@ AsyncTransaction* AsyncTPCCClient::GetNextTransaction() {
 
 }
 
+AsyncTransaction* AsyncTPCCClient::GetNextTransaction_ycsb() {}
+
+AsyncTransaction* AsyncTPCCClient::GetNextTransaction_batch() {}
+
 std::string AsyncTPCCClient::GetLastOp() const {
   return lastOp;
 }

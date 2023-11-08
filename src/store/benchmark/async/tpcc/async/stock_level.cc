@@ -101,5 +101,11 @@ Operation AsyncStockLevel::GetNextOperation(size_t outstandingOpCount, size_t fi
   }
 }
 
+Operation AsyncStockLevel::GetNextOperation_ycsb(size_t outstandingOpCount, size_t finishedOpCount,
+      std::map<std::string, std::string> readValues, Xoroshiro128Plus &rnd, FastZipf &zipf){}
+
+Operation AsyncStockLevel::GetNextOperation_batch(size_t outstandingOpCount, size_t finishedOpCount,
+  std::map<std::string, std::string> readValues, int batchSize, Xoroshiro128Plus &rnd, FastZipf &zipf) {}
+
 
 }
