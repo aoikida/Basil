@@ -41,31 +41,17 @@
 
 #include "store/common/partitioner.h"
 #include "store/server.h"
-#include "store/strongstore/server.h"
-#include "store/tapirstore/server.h"
-#include "store/weakstore/server.h"
-#include "store/indicusstore/server.h"
-#include "store/pbftstore/replica.h"
-#include "store/pbftstore/server.h"
-// HotStuff
-#include "store/hotstuffstore/replica.h"
-#include "store/hotstuffstore/server.h"
 
 #include "store/benchmark/async/tpcc/tpcc-proto.pb.h"
 #include "store/indicusstore/common.h"
+#include "store/indicusstore/server.h"
 
 #include <gflags/gflags.h>
 #include <thread>
 
 enum protocol_t {
 	PROTO_UNKNOWN,
-	PROTO_TAPIR,
-	PROTO_WEAK,
-	PROTO_STRONG,
   PROTO_INDICUS,
-	PROTO_PBFT,
-    // HotStuff
-    PROTO_HOTSTUFF
 };
 
 enum transmode_t {
@@ -94,7 +80,10 @@ DEFINE_uint64(replica_idx, 0, "index of replica in shard configuration file");
 DEFINE_uint64(group_idx, 0, "index of the group to which this replica belongs");
 DEFINE_uint64(num_groups, 1, "number of replica groups in the system");
 DEFINE_uint64(num_shards, 1, "number of shards in the system");
-DEFINE_bool(debug_stats, false, "record stats related to debugging");
+DEFINE_bool(debug_stats, true, "record stats related to debugging");
+DEFINE_uint64(num_ops, 1, "number of keys to generate");
+DEFINE_bool(batch_optimization, true, "if true batch optimization, false no batch optimization");
+DEFINE_bool(signature_batch, false, "if true signature_batch, else if false no conventional.");
 
 DEFINE_bool(rw_or_retwis, true, "true for rw, false for retwis");
 const std::string protocol_args[] = {
@@ -103,15 +92,10 @@ const std::string protocol_args[] = {
   "strong",
   "indicus",
 	"pbft",
-    "hotstuff"
+  "hotstuff"
 };
 const protocol_t protos[] {
-  PROTO_TAPIR,
-  PROTO_WEAK,
-  PROTO_STRONG,
   PROTO_INDICUS,
-      PROTO_PBFT,
-      PROTO_HOTSTUFF
 };
 static bool ValidateProtocol(const char* flagname,
     const std::string &value) {
@@ -180,42 +164,8 @@ DEFINE_validator(partitioner, &ValidatePartitioner);
 /**
  * TPCC settings.
  */
-DEFINE_int32(tpcc_num_warehouses, 1, "number of warehouses (for tpcc)");
+DEFINE_int32(tpcc_num_warehouses, 20, "number of warehouses (for tpcc)");
 
-/**
- * TAPIR settings.
- */
-DEFINE_bool(tapir_linearizable, true, "run TAPIR in linearizable mode");
-
-/**
- * StrongStore settings.
- */
-const std::string strongmode_args[] = {
-	"lock",
-  "occ",
-  "span-lock",
-  "span-occ"
-};
-const strongstore::Mode strongmodes[] {
-  strongstore::MODE_LOCK,
-  strongstore::MODE_OCC,
-  strongstore::MODE_SPAN_LOCK,
-  strongstore::MODE_SPAN_OCC
-};
-static bool ValidateStrongMode(const char* flagname,
-    const std::string &value) {
-  int n = sizeof(strongmode_args);
-  for (int i = 0; i < n; ++i) {
-    if (value == strongmode_args[i]) {
-      return true;
-    }
-  }
-  std::cerr << "Invalid value for --" << flagname << ": " << value << std::endl;
-  return false;
-}
-DEFINE_string(strongmode, strongmode_args[0],	"the protocol to use during this"
-    " experiment");
-DEFINE_validator(strongmode, &ValidateStrongMode);
 
 /**
  * Morty settings.
@@ -236,7 +186,7 @@ DEFINE_bool(indicus_sign_messages, true, "add signatures to messages as"
     " necessary to prevent impersonation (for Indicus)");
 DEFINE_bool(indicus_validate_proofs, true, "send and validate proofs as"
     " necessary to check Byzantine behavior (for Indicus)");
-DEFINE_bool(indicus_hash_digest, false, "use hash function compute transaction"
+DEFINE_bool(indicus_hash_digest, true, "use hash function compute transaction"
     " digest (for Indicus)");
 DEFINE_bool(indicus_verify_deps, true, "check signatures of transaction"
     " depdendencies (for Indicus)");
@@ -246,7 +196,7 @@ DEFINE_bool(indicus_adjust_batch_size, false, "dynamically adjust batch size"
     " every sig_batch_timeout (for Indicus)");
 DEFINE_uint64(indicus_merkle_branch_factor, 2, "branch factor of merkle tree"
     " of batch (for Indicus)");
-DEFINE_uint64(indicus_sig_batch, 2, "signature batch size"
+DEFINE_uint64(indicus_sig_batch, 1, "signature batch size"
     " sig batch size (for Indicus)");
 DEFINE_uint64(indicus_sig_batch_timeout, 10, "signature batch timeout ms"
     " sig batch timeout (for Indicus)");
@@ -271,16 +221,21 @@ DEFINE_bool(indicus_mainThreadDispatching, true, "dispatching main thread work t
 DEFINE_bool(indicus_dispatchMessageReceive, false, "delegating serialization to worker main thread");
 DEFINE_bool(indicus_parallel_reads, true, "dispatching reads to worker threads");
 DEFINE_bool(indicus_parallel_CCC, true, "dispatch concurrency control check to worker threads");
-DEFINE_bool(indicus_dispatchCallbacks, true, "dispatching P2 and WB callbacks to main worker thread");
+DEFINE_bool(indicus_dispatchCallbacks, false, "dispatching P2 and WB callbacks to main worker thread");
 
 DEFINE_uint64(indicus_process_id, 0, "id used for Threadpool core affinity");
 DEFINE_uint64(indicus_total_processes, 1, "number of server processes per machine");
 DEFINE_bool(indicus_hyper_threading, true, "use hyperthreading");
 
 DEFINE_bool(indicus_all_to_all_fb, false, "use the all to all view change method");
-DEFINE_bool(indicus_no_fallback, false, "turn off fallback protocol");
+DEFINE_bool(indicus_no_fallback, true, "turn off fallback protocol");
 DEFINE_uint64(indicus_relayP1_timeout, 100, "time (ms) after which to send RelayP1");
 DEFINE_bool(indicus_replica_gossip, false, "use gossip between replicas to exchange p1");
+DEFINE_uint64(indicus_batch_size, 2, "number of transaction in batch");
+DEFINE_uint64(indicus_num_ops, 10, "number of operations in transaction");
+
+DEFINE_double(zipf_coefficient, 0.5, "the coefficient of the zipf distribution "
+    "for key selection.");
 
 DEFINE_uint64(pbft_esig_batch, 1, "signature batch size"
 		" sig batch size (for PBFT decision phase)");
@@ -346,6 +301,8 @@ DEFINE_string(stats_file, "", "path to file for server stats");
 /**
  * Benchmark settings.
  */
+// key_pathとdata_file_pathに何も代入されていない時は、rwかretwis
+// 代入されている場合は、smallbankかtpccで、data_file_pathにパスを代入する必要があるはず。
 DEFINE_string(keys_path, "", "path to file containing keys in the system");
 DEFINE_uint64(num_keys, 0, "number of keys to generate");
 DEFINE_string(data_file_path, "", "path to file containing key-value pairs to be loaded");
@@ -409,16 +366,6 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-  strongstore::Mode strongMode = strongstore::Mode::MODE_UNKNOWN;
-  if (proto == PROTO_STRONG) {
-    int numStrongModes = sizeof(strongmode_args);
-    for (int i = 0; i < numStrongModes; ++i) {
-      if (FLAGS_strongmode == strongmode_args[i]) {
-        strongMode = strongmodes[i];
-        break;
-      }
-    }
-  }
 
   switch (trans) {
     case TRANS_TCP:
@@ -515,23 +462,6 @@ int main(int argc, char **argv) {
   KeyManager keyManager(FLAGS_indicus_key_path, keyType, true);
 
   switch (proto) {
-  case PROTO_TAPIR: {
-      server = new tapirstore::Server(FLAGS_tapir_linearizable);
-      replica = new replication::ir::IRReplica(config, FLAGS_group_idx, FLAGS_replica_idx,
-                                               tport, dynamic_cast<replication::ir::IRAppReplica *>(server));
-      break;
-  }
-  case PROTO_WEAK: {
-      server = new weakstore::Server(config, FLAGS_group_idx, FLAGS_replica_idx, tport);
-      break;
-  }
-  case PROTO_STRONG: {
-      server = new strongstore::Server(strongMode, FLAGS_clock_skew,
-                                       FLAGS_clock_error);
-      replica = new replication::vr::VRReplica(config, FLAGS_group_idx, FLAGS_replica_idx,
-                                               tport, 1, dynamic_cast<replication::AppReplica *>(server));
-      break;
-  }
   case PROTO_INDICUS: {
       uint64_t readDepSize = 0;
       switch (read_dep) {
@@ -575,7 +505,8 @@ int main(int argc, char **argv) {
 																			FLAGS_indicus_dispatchCallbacks,
 																			FLAGS_indicus_all_to_all_fb,
 																		  FLAGS_indicus_no_fallback, FLAGS_indicus_relayP1_timeout,
-																		  FLAGS_indicus_replica_gossip);
+																		  FLAGS_indicus_replica_gossip, 
+                                      FLAGS_batch_optimization, FLAGS_indicus_batch_size, FLAGS_indicus_num_ops, FLAGS_num_keys, FLAGS_zipf_coefficient, FLAGS_signature_batch);
       Debug("Starting new server object");
       server = new indicusstore::Server(config, FLAGS_group_idx,
                                         FLAGS_replica_idx, FLAGS_num_shards, FLAGS_num_groups, tport,
@@ -583,35 +514,6 @@ int main(int argc, char **argv) {
                                         FLAGS_indicus_sig_batch_timeout);
       break;
   }
-  case PROTO_PBFT: {
-      server = new pbftstore::Server(config, &keyManager,
-                                     FLAGS_group_idx, FLAGS_replica_idx, FLAGS_num_shards, FLAGS_num_groups,
-                                     FLAGS_indicus_sign_messages, FLAGS_indicus_validate_proofs,
-                                     FLAGS_indicus_time_delta, part,
-																	   FLAGS_pbft_order_commit, FLAGS_pbft_validate_abort);
-      replica = new pbftstore::Replica(config, &keyManager,
-                                       dynamic_cast<pbftstore::App *>(server),
-                                       FLAGS_group_idx, FLAGS_replica_idx, FLAGS_indicus_sign_messages,
-                                       FLAGS_indicus_sig_batch, FLAGS_indicus_sig_batch_timeout,
-                                       FLAGS_pbft_esig_batch, FLAGS_pbft_esig_batch_timeout,
-                                       FLAGS_indicus_use_coordinator, FLAGS_indicus_request_tx, tport);
-      //FLAGS_pbft_esig_batch, FLAGS_pbft_esig_batch_timeout,
-      break;
-  }
-      // HotStuff
-  case PROTO_HOTSTUFF: {
-      server = new hotstuffstore::Server(config, &keyManager,
-                                     FLAGS_group_idx, FLAGS_replica_idx, FLAGS_num_shards, FLAGS_num_groups,
-                                     FLAGS_indicus_sign_messages, FLAGS_indicus_validate_proofs,
-                                     FLAGS_indicus_time_delta, part);
-      replica = new hotstuffstore::Replica(config, &keyManager,
-                                       dynamic_cast<hotstuffstore::App *>(server),
-                                       FLAGS_group_idx, FLAGS_replica_idx, FLAGS_indicus_sign_messages,
-                                       FLAGS_indicus_sig_batch,
-																			 FLAGS_indicus_sig_batch_timeout, FLAGS_indicus_use_coordinator, FLAGS_indicus_request_tx, tport);
-      break;
-  }
-
   default: {
       NOT_REACHABLE();
   }
@@ -619,6 +521,7 @@ int main(int argc, char **argv) {
 
   // parse keys
   std::vector<std::string> keys;
+  // data_fileとkeys_fileがない場合 → rwか、retwisのどちらか
   if (FLAGS_data_file_path.empty() && FLAGS_keys_path.empty()) {
     /*if (FLAGS_num_keys > 0) {
       for (size_t i = 0; i < FLAGS_num_keys; ++i) {
@@ -652,9 +555,9 @@ int main(int argc, char **argv) {
 				}
 				++loaded;
 			}
-			Notice("Created and Stored %lu out of %lu key-value pairs", stored,
-	        loaded);
+			Notice("Created and Stored %lu out of %lu key-value pairs", stored, loaded);
 		}
+  // tpcc or smallbankの場合はこっちを通っているはず。
   } else if (FLAGS_data_file_path.length() > 0 && FLAGS_keys_path.empty()) {
     std::ifstream in;
     in.open(FLAGS_data_file_path);
@@ -666,6 +569,7 @@ int main(int argc, char **argv) {
     size_t loaded = 0;
     size_t stored = 0;
     Debug("Populating with data from %s.", FLAGS_data_file_path.c_str());
+    printf("Populating with data from %s.", FLAGS_data_file_path.c_str());
     std::vector<int> txnGroups;
     while (!in.eof()) {
       std::string key;
@@ -680,6 +584,8 @@ int main(int argc, char **argv) {
         ++loaded;
       }
     }
+    printf("Stored %lu out of %lu key-value pairs from file %s.", stored,
+        loaded, FLAGS_data_file_path.c_str());
 		Notice("Stored %lu out of %lu key-value pairs from file %s.", stored,
         loaded, FLAGS_data_file_path.c_str());
     // Debug("Stored %lu out of %lu key-value pairs from file %s.", stored,
@@ -709,7 +615,7 @@ int main(int argc, char **argv) {
   CALLGRIND_START_INSTRUMENTATION;
 	//SET THREAD AFFINITY if running multi_threading:
 	//if(FLAGS_indicus_multi_threading){
-	if((proto == PROTO_INDICUS || proto == PROTO_PBFT)&& FLAGS_indicus_multi_threading){
+	if((proto == PROTO_INDICUS)&& FLAGS_indicus_multi_threading){
 		cpu_set_t cpuset;
 		CPU_ZERO(&cpuset);
 		//bool hyperthreading = true;
