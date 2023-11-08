@@ -64,6 +64,11 @@ public:
     virtual void ReceiveMessage(const TransportAddress &remote,
                                 const string &type, const string &data,
                                 void *meta_data);
+    
+    virtual void ReceiveMessage_batch(const TransportAddress &remote,
+                                const std::vector<std::string> &types, const std::vector<std::string> &datas,
+                                void *meta_data);
+
 
 protected:
     int view;

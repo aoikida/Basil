@@ -450,6 +450,34 @@ IRClient::ReceiveMessage(const TransportAddress &remote,
 }
 
 void
+IRClient::ReceiveMessage_batch(const TransportAddress &remote,
+                         const std::vector<std::string> &types,
+                         const std::vector<std::string> &datas, void *meta_data)
+{   /*
+    proto::ReplyInconsistentMessage replyInconsistent;
+    proto::ReplyConsensusMessage replyConsensus;
+    proto::ConfirmMessage confirm;
+    proto::UnloggedReplyMessage unloggedReply;
+
+    if (type == replyInconsistent.GetTypeName()) {
+        replyInconsistent.ParseFromString(data);
+        HandleInconsistentReply(remote, replyInconsistent);
+    } else if (type == replyConsensus.GetTypeName()) {
+        replyConsensus.ParseFromString(data);
+        HandleConsensusReply(remote, replyConsensus);
+    } else if (type == confirm.GetTypeName()) {
+        confirm.ParseFromString(data);
+        HandleConfirm(remote, confirm);
+    } else if (type == unloggedReply.GetTypeName()) {
+        unloggedReply.ParseFromString(data);
+        HandleUnloggedReply(remote, unloggedReply);
+    } else {
+        Client::ReceiveMessage(remote, type, data, meta_data);
+    }
+    */
+}
+
+void
 IRClient::HandleInconsistentReply(const TransportAddress &remote,
                                   const proto::ReplyInconsistentMessage &msg)
 {

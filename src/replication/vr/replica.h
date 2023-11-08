@@ -56,6 +56,10 @@ public:
                         const string &type, const string &data,
                         void *meta_data);
 
+    void ReceiveMessage_batch(const TransportAddress &remote,
+                        const std::vector<std::string> &types, const std::vector<std::string> &datas,
+                        void *meta_data);
+
 private:
     view_t view;
     opnum_t lastCommitted;

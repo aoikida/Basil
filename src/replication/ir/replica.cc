@@ -74,6 +74,14 @@ IRReplica::ReceiveMessage(const TransportAddress &remote,
 }
 
 void
+IRReplica::ReceiveMessage_batch(const TransportAddress &remote,
+                          const std::vector<std::string> &types, const std::vector<std::string> &datas,
+                          void *meta_data)
+{
+    //HandleMessage(remote, type, data);
+}
+
+void
 IRReplica::HandleMessage(const TransportAddress &remote,
                          const string &type, const string &data)
 {

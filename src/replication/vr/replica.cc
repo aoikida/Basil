@@ -398,6 +398,11 @@ VRReplica::ReceiveMessage(const TransportAddress &remote,
 }
 
 void
+VRReplica::ReceiveMessage_batch(const TransportAddress &remote,
+                          const std::vector<std::string> &types, const std::vector<std::string> &datas,
+                          void *meta_data){}
+
+void
 VRReplica::HandleRequest(const TransportAddress &remote,
                          const RequestMessage &msg)
 {

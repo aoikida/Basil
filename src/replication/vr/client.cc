@@ -163,6 +163,11 @@ VRClient::ReceiveMessage(const TransportAddress &remote,
 }
 
 void
+VRClient::ReceiveMessage_batch(const TransportAddress &remote,
+                         const std::vector<std::string> &types,
+                         const std::vector<std::string> &datas, void *meta_data){}
+
+void
 VRClient::HandleReply(const TransportAddress &remote,
                       const proto::ReplyMessage &msg)
 {
