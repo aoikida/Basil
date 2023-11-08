@@ -226,6 +226,9 @@ void Replica::ReceiveMessage(const TransportAddress &remote, const string &t,
   }
 }
 
+void Replica::ReceiveMessage_batch(const TransportAddress &remote, const std::vector<std::string> &types,
+                          const std::vector<std::string> &datas, void *meta_data) {}
+
 void Replica::handleMessage(const TransportAddress &remote, const string &type, const string &data){
   if(false){
     //need to copy type and data.

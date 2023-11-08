@@ -57,18 +57,42 @@ class Client : public ::Client {
   virtual void Begin(begin_callback bcb, begin_timeout_callback btcb,
       uint32_t timeout, bool retry = false) override;
 
+  virtual void Begin_ycsb(begin_callback_ycsb bcby, begin_timeout_callback btcb,
+      uint32_t timeout, bool retry = false) override;
+
+  virtual void Begin_batch(begin_callback_batch bcb, begin_timeout_callback btcb,
+      uint32_t timeout, bool retry = false) override;
+
   // Get the value corresponding to key.
   virtual void Get(const std::string &key, get_callback gcb,
       get_timeout_callback gtcb, uint32_t timeout) override;
+  
+  virtual void Get_ycsb(const std::string &key, get_callback_ycsb gcby,
+      get_timeout_callback gtcb, uint32_t timeout) override;
+
+  // 追加
+  virtual void Get_batch(const std::vector<std::string> &key_list, std::vector<get_callback> &gcb_list, std::multimap<std::string, int> *keyTxMap,
+      get_timeout_callback_batch gtcb, uint32_t timeout) override;
 
   // Set the value for the given key.
   virtual void Put(const std::string &key, const std::string &value,
       put_callback pcb, put_timeout_callback ptcb,
       uint32_t timeout) override;
 
+  virtual void Put_ycsb(const std::string &key, const std::string &value,
+      put_callback_ycsb pcby, put_timeout_callback ptcb,
+      uint32_t timeout) override;
+  
+  virtual void Put_batch(const std::string &key, const std::string &value,
+      put_callback pcb, put_timeout_callback ptcb,
+      int batch_num, uint32_t timeout) override;
+
   // Commit all Get(s) and Put(s) since Begin().
   virtual void Commit(commit_callback ccb, commit_timeout_callback ctcb,
       uint32_t timeout) override;
+
+  virtual void Commit_batch(commit_callback_batch ccb, commit_timeout_callback ctcb,
+      uint32_t timeout, int batch_size_at_commit) override;
 
   // Abort all Get(s) and Put(s) since Begin().
   virtual void Abort(abort_callback acb, abort_timeout_callback atcb,

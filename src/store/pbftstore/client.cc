@@ -93,6 +93,11 @@ void Client::Begin(begin_callback bcb, begin_timeout_callback btcb, uint32_t tim
   });
 }
 
+void Client::Begin_ycsb(begin_callback_ycsb bcby, begin_timeout_callback btcb, uint32_t timeout, bool retry) {}
+
+void Client::Begin_batch(begin_callback_batch bcb, begin_timeout_callback btcb, uint32_t timeout, bool retry) {}
+
+
 void Client::Get(const std::string &key, get_callback gcb,
     get_timeout_callback gtcb, uint32_t timeout) {
   transport->Timer(0, [this, key, gcb, gtcb, timeout]() {
@@ -124,6 +129,12 @@ void Client::Get(const std::string &key, get_callback gcb,
   });
 }
 
+void Client::Get_ycsb(const std::string &key, get_callback_ycsb gcby,
+    get_timeout_callback gtcb, uint32_t timeout) {}
+
+void Client::Get_batch(const std::vector<std::string> &key_list, std::vector<get_callback> &gcb_list, std::multimap<std::string, int> *keyTxMap, 
+      get_timeout_callback_batch gtcb, uint32_t timeout){}
+
 void Client::Put(const std::string &key, const std::string &value,
     put_callback pcb, put_timeout_callback ptcb, uint32_t timeout) {
   transport->Timer(0, [this, key, value, pcb, ptcb, timeout]() {
@@ -143,6 +154,12 @@ void Client::Put(const std::string &key, const std::string &value,
     pcb(REPLY_OK, key, value);
   });
 }
+
+void Client::Put_ycsb(const std::string &key, const std::string &value,
+    put_callback_ycsb pcby, put_timeout_callback ptcb, uint32_t timeout) {}
+
+void Client::Put_batch(const std::string &key, const std::string &value,
+    put_callback pcb, put_timeout_callback ptcb, int batch_num, uint32_t timeout) {}
 
 void Client::Commit(commit_callback ccb, commit_timeout_callback ctcb,
     uint32_t timeout) {
@@ -184,6 +201,9 @@ void Client::Commit(commit_callback ccb, commit_timeout_callback ctcb,
     }
   });
 }
+
+void Client::Commit_batch(commit_callback_batch ccb, commit_timeout_callback ctcb,
+    uint32_t timeout, int commitTxNum) {}
 
 void Client::HandleSignedPrepareReply(std::string digest, uint64_t shard_id, int status,
   const proto::GroupedSignedMessage& gsm) {
