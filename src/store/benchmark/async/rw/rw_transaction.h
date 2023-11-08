@@ -43,6 +43,12 @@ class RWTransaction : public AsyncTransaction {
   virtual Operation GetNextOperation(size_t outstandingOpCount, size_t finishedOpCount,
       std::map<std::string, std::string> readValues);
 
+  virtual Operation GetNextOperation_ycsb(size_t outstandingOpCount, size_t finishedOpCount,
+      std::map<std::string, std::string> readValues, Xoroshiro128Plus &rnd, FastZipf &zipf);
+  
+  virtual Operation GetNextOperation_batch(size_t outstandingOpCount, size_t finishedOpCount,
+      std::map<std::string, std::string> readValues, int batchSize, Xoroshiro128Plus &rnd, FastZipf &zipf);
+
   inline const std::vector<int> getKeyIdxs() const {
     return keyIdxs;
   }
@@ -59,6 +65,10 @@ class RWTransaction : public AsyncTransaction {
   const size_t numOps;
   const bool readOnly;
   std::vector<int> keyIdxs;
+  std::vector<Operation> read_set;
+  std::vector<Operation> pre_read_set;
+  std::vector<Operation> write_set;
+  std::vector<Operation> pre_write_set;
 
 };
 
