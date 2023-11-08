@@ -51,7 +51,16 @@ void SyncTransactionBenchClient::SendNext() {
   SendNext(&result);
 }
 
+void SyncTransactionBenchClient::SendNext_ycsb() {
+}
+
+
+void SyncTransactionBenchClient::SendNext_batch() {
+}
+
+
 void SyncTransactionBenchClient::SendNext(transaction_status_t *result) {
+  Debug("sync_transaction_bench_client::SendNext\n");
   currTxn = GetNextTransaction();
   currTxnAttempts = 0;
   *result = ABORTED_SYSTEM; // default to failure
@@ -87,5 +96,51 @@ void SyncTransactionBenchClient::SendNext(transaction_status_t *result) {
       std::this_thread::sleep_for(std::chrono::milliseconds(backoff));
     }
   }
-  Debug("Transaction finished with result %d.", *result);
+  Debug("Transaction finished with result %d. \n", *result);
 }
+
+/*
+void SyncTransactionBenchClient::SendNext_batch(std::vector<transaction_status_t> results) {
+  Debug("sync_transaction_bench_client::SendNext_batch\n");
+
+  currTxn = GetNextTransaction();
+  currTxnAttempts = 0;
+  results = currTxn->Execute_batch(client);
+  for (int i = 0; i < results.size(); i++){
+    results[i] = ABORTED_SYSTEM; // default to failure
+    while (true) {
+      results[i] = currTxn->Execute(client);
+      stats.Increment(GetLastOp() + "_attempts", 1);
+      ++currTxnAttempts;
+      if (results[i] == COMMITTED || results[i] == ABORTED_USER
+          || (maxAttempts != -1 && currTxnAttempts >= static_cast<uint64_t>(maxAttempts))
+          || !retryAborted) {
+        if (results[i] == COMMITTED) {
+          stats.Increment(GetLastOp() + "_committed", 1);
+        } else {
+          stats.Increment(GetLastOp() +  "_" + std::to_string(results[i]), 1);
+        }
+        if (retryAborted) {
+          //stats.Add(GetLastOp() + "_attempts_list", currTxnAttempts); //TODO: uncomment if need stats files
+        }
+        delete currTxn;
+        currTxn = nullptr;
+        break;
+      } else {
+        stats.Increment(GetLastOp() + "_" + std::to_string(results[i]), 1);
+        uint64_t backoff = 0;
+        if (abortBackoff > 0) {
+          uint64_t exp = std::min(currTxnAttempts - 1UL, 56UL);
+          uint64_t upper = std::min((1UL << exp) * static_cast<uint64_t>(abortBackoff),
+            maxBackoff);
+          backoff = std::uniform_int_distribution<uint64_t>(upper >> 1, upper)(GetRand());
+          stats.Increment(GetLastOp() + "_backoff", backoff);
+          Debug("Backing off for %lums", backoff);
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(backoff));
+      }
+    }
+    Debug("Transaction finished with result %d. \n", results[i]);
+  }
+}
+*/

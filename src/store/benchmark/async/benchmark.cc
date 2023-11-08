@@ -50,6 +50,7 @@
 #include "store/benchmark/async/common/uniform_key_selector.h"
 #include "store/benchmark/async/retwis/retwis_client.h"
 #include "store/benchmark/async/rw/rw_client.h"
+#include "store/benchmark/async/ycsb/ycsb_client.h"
 #include "store/benchmark/async/tpcc/sync/tpcc_client.h"
 #include "store/benchmark/async/tpcc/async/tpcc_client.h"
 #include "store/benchmark/async/smallbank/smallbank_client.h"
@@ -87,7 +88,9 @@ enum benchmode_t {
   BENCH_TPCC,
   BENCH_SMALLBANK_SYNC,
   BENCH_RW,
-  BENCH_TPCC_SYNC
+  BENCH_TPCC_SYNC,
+  BENCH_YCSB,
+  BENCH_YCSB_SYNC
 };
 
 enum keysmode_t {
@@ -132,9 +135,14 @@ DEFINE_string(config_path, "", "path to shard configuration file");
 DEFINE_uint64(num_shards, 1, "number of shards in the system");
 DEFINE_uint64(num_groups, 1, "number of replica groups in the system");
 DEFINE_bool(ping_replicas, false, "determine latency to replicas via pings");
-
 DEFINE_bool(tapir_sync_commit, true, "wait until commit phase completes before"
     " sending additional transactions (for TAPIR)");
+//追加
+DEFINE_bool(batch_optimization, false, "if true batch optimization, else if false no conventional.");
+DEFINE_bool(signature_batch, false, "if true signature_batch, else if false no conventional.");
+
+//rw setting
+DEFINE_uint64(num_ops, 2, "number of ops in each txn (for rw)");
 
 const std::string read_quorum_args[] = {
 	"one",
@@ -161,7 +169,7 @@ static bool ValidateReadQuorum(const char* flagname,
   std::cerr << "Invalid value for --" << flagname << ": " << value << std::endl;
   return false;
 }
-DEFINE_string(indicus_read_quorum, read_quorum_args[0], "size of read quorums"
+DEFINE_string(indicus_read_quorum, read_quorum_args[1], "size of read quorums"
     " (for Indicus)");
 DEFINE_validator(indicus_read_quorum, &ValidateReadQuorum);
 const std::string read_dep_args[] = {
@@ -214,11 +222,11 @@ DEFINE_bool(indicus_sign_messages, true, "add signatures to messages as"
     " necessary to prevent impersonation (for Indicus)");
 DEFINE_bool(indicus_validate_proofs, true, "send and validate proofs as"
     " necessary to check Byzantine behavior (for Indicus)");
-DEFINE_bool(indicus_hash_digest, false, "use hash function compute transaction"
+DEFINE_bool(indicus_hash_digest, true, "use hash function compute transaction"
     " digest (for Indicus)");
 DEFINE_bool(indicus_verify_deps, true, "check signatures of transaction"
     " depdendencies (for Indicus)");
-DEFINE_uint64(indicus_sig_batch, 2, "signature batch size"
+DEFINE_uint64(indicus_sig_batch, 1, "signature batch size"
     " sig batch size (for Indicus)");
 DEFINE_uint64(indicus_merkle_branch_factor, 2, "branch factor of merkle tree"
     " of batch (for Indicus)");
@@ -234,24 +242,28 @@ DEFINE_uint64(indicus_inject_failure_proportion, 0, "proportion of clients that"
     " will inject a failure (for Indicus)");
 DEFINE_uint64(indicus_inject_failure_freq, 100, "number of transactions per ONE failure"
 		    " in a Byz client (for Indicus)");
+DEFINE_bool(indicus_read_reply_batch, false, "true read reply false no read reply batch(for Indicus)");
 
 DEFINE_uint64(indicus_phase1DecisionTimeout, 1000UL, "p1 timeout before going slowpath");
 DEFINE_bool(indicus_multi_threading, false, "dispatch crypto to parallel threads");
 DEFINE_bool(indicus_batch_verification, false, "using ed25519 donna batch verification");
-DEFINE_uint64(indicus_batch_verification_size, 64, "batch size for ed25519 donna batch verification");
+DEFINE_uint64(indicus_batch_verification_size, 48, "batch size for ed25519 donna batch verification");
 DEFINE_uint64(indicus_batch_verification_timeout, 5, "batch verification timeout, ms");
 
 DEFINE_bool(pbft_order_commit, false, "order commit writebacks as well");
-DEFINE_bool(pbft_validate_abort, false, "validate abort writebacks as well");
+DEFINE_bool(pbft_validate_abort, false, "validate abort writebacks as well"); 
 
 DEFINE_bool(indicus_parallel_CCC, true, "sort read/write set for parallel CCC locking at server");
 
-DEFINE_bool(indicus_hyper_threading, true, "use hyperthreading");
+DEFINE_bool(indicus_hyper_threading, false, "use hyperthreading");
 
-DEFINE_bool(indicus_no_fallback, false, "turn off fallback protocol");
+DEFINE_bool(indicus_no_fallback, true, "turn off fallback protocol");
 DEFINE_uint64(indicus_max_consecutive_abstains, 1, "number of consecutive conflicts before fallback is triggered");
 DEFINE_bool(indicus_all_to_all_fb, false, "use the all to all view change method");
 DEFINE_uint64(indicus_relayP1_timeout, 1, "time (ms) after which to send RelayP1");
+//DEFINE_bool(indicus_batch_optimization, true, "if true batch optimization, false no batch optimization");
+DEFINE_uint64(indicus_batch_size, 2, "number of transaction in batch");
+//DEFINE_uint64(indicus_num_ops, FLAGS_num_ops, "number of operations in transaction");
 
 const std::string if_args[] = {
   "client-crash",
@@ -368,14 +380,18 @@ const std::string benchmark_args[] = {
   "tpcc",
   "smallbank",
   "rw",
-  "tpcc-sync"
+  "tpcc-sync",
+  "ycsb",
+  "ycsb-sync"
 };
 const benchmode_t benchmodes[] {
   BENCH_RETWIS,
   BENCH_TPCC,
   BENCH_SMALLBANK_SYNC,
   BENCH_RW,
-  BENCH_TPCC_SYNC
+  BENCH_TPCC_SYNC,
+  BENCH_YCSB,
+  BENCH_YCSB_SYNC
 };
 static bool ValidateBenchmark(const char* flagname, const std::string &value) {
   int n = sizeof(benchmark_args);
@@ -418,6 +434,7 @@ DEFINE_int64(max_attempts, -1, "max number of attempts per transaction (or -1"
     " for unlimited).");
 DEFINE_uint64(message_timeout, 10000, "length of timeout for messages in ms.");
 DEFINE_uint64(max_backoff, 5000, "max time to sleep after aborting.");
+
 
 const std::string partitioner_args[] = {
 	"default",
@@ -481,12 +498,14 @@ DEFINE_double(zipf_coefficient, 0.5, "the coefficient of the zipf distribution "
 /**
  * RW settings.
  */
-DEFINE_uint64(num_ops_txn, 1, "number of ops in each txn"
-    " (for rw)");
+//DEFINE_uint64(num_ops, 1, "number of ops in each txn(for rw)");
 DEFINE_bool(rw_read_only, false, "only do read operations");
 // RW benchmark also uses same config parameters as Retwis.
 
-
+/**
+ * YCSB settings.
+ */
+DEFINE_int32(read_ratio, 50, "percentage of read transactions (for ycsb)");
 /**
  * TPCC settings.
  */
@@ -496,7 +515,7 @@ DEFINE_int32(clients_per_warehouse, 1, "number of clients per warehouse"
 		" (for tpcc)");
 DEFINE_int32(remote_item_milli_p, 0, "remote item milli p (for tpcc)");
 
-DEFINE_int32(tpcc_num_warehouses, 1, "number of warehouses (for tpcc)");
+DEFINE_int32(tpcc_num_warehouses, 20, "number of warehouses (for tpcc)");
 DEFINE_int32(tpcc_w_id, 1, "home warehouse id for this client (for tpcc)");
 DEFINE_int32(tpcc_C_c_id, 1, "C value for NURand() when selecting"
     " random customer id (for tpcc)");
@@ -532,7 +551,7 @@ DEFINE_int32(num_hotspots, 1000, "# of hotspots (for smallbank)");
 DEFINE_int32(num_customers, 18000, "# of customers (for smallbank)");
 DEFINE_double(hotspot_probability, 0.9, "probability of ending in hotspot");
 DEFINE_int32(timeout, 5000, "timeout in ms (for smallbank)");
-DEFINE_string(customer_name_file_path, "smallbank_names", "path to file"
+DEFINE_string(customer_name_file_path, "/usr/local/etc/smallbank_names", "path to file"
     " containing names to be loaded (for smallbank)");
 
 DEFINE_LATENCY(op);
@@ -552,11 +571,16 @@ void Cleanup(int signal);
 void FlushStats();
 
 int main(int argc, char **argv) {
+
   gflags::SetUsageMessage(
            "executes transactions from various transactional workload\n"
 "           benchmarks against various distributed replicated transaction\n"
 "           processing systems.");
 	gflags::ParseCommandLineFlags(&argc, &argv, true);
+
+  Xoroshiro128Plus rnd;
+  rnd.init();
+  FastZipf zipf(&rnd, FLAGS_zipf_coefficient, FLAGS_num_keys);
 
   // parse transport protocol
   transmode_t trans = TRANS_UNKNOWN;
@@ -689,10 +713,9 @@ int main(int argc, char **argv) {
     iss >> replica;
   }
 
-
   // parse retwis settings
   std::vector<std::string> keys;
-  if (benchMode == BENCH_RETWIS || benchMode == BENCH_RW) {
+  if (benchMode == BENCH_RETWIS || benchMode == BENCH_RW || benchMode == BENCH_YCSB) {
     if (FLAGS_keys_path.empty()) {
       if (FLAGS_num_keys > 0) {
         for (size_t i = 0; i < FLAGS_num_keys; ++i) {
@@ -721,6 +744,7 @@ int main(int argc, char **argv) {
 
   switch (trans) {
     case TRANS_TCP:
+      // TCPTransportクラスのオブジェクトが作成されるタイミングでthreadpool::startが呼び出される
       tport = new TCPTransport(0.0, 0.0, 0, false, 0, 1, FLAGS_indicus_hyper_threading, false);
       break;
     case TRANS_UDP:
@@ -729,7 +753,6 @@ int main(int argc, char **argv) {
     default:
       NOT_REACHABLE();
   }
-
 
   KeySelector *keySelector;
   switch (keySelectionMode) {
@@ -829,9 +852,9 @@ int main(int argc, char **argv) {
                << closestReplicas.size() << std::endl;
     return 1;
   }
-
-  if (FLAGS_num_clients > (1 << 6)) {
-    std::cerr << "Only support up to " << (1 << 6) << " clients in one process." << std::endl;
+  // (1 << 8)は256
+  if (FLAGS_num_clients > (1 << 8)) {
+    std::cerr << "Only support up to " << (1 << 8) << " clients in one process." << std::endl;
     return 1;
   }
 
@@ -841,7 +864,7 @@ int main(int argc, char **argv) {
     SyncClient *syncClient = nullptr;
     OneShotClient *oneShotClient = nullptr;
 
-    uint64_t clientId = (FLAGS_client_id << 6) | i;
+    uint64_t clientId = (FLAGS_client_id << 8) | i;
     switch (mode) {
     case PROTO_TAPIR: {
         client = new tapirstore::Client(config, clientId,
@@ -876,7 +899,7 @@ int main(int argc, char **argv) {
         uint64_t readMessages = 0;
         switch (read_messages) {
         case READ_MESSAGES_READ_QUORUM:
-            readMessages = readQuorumSize;// + config->f;
+            readMessages = readQuorumSize + config->f;
             break;
         case READ_MESSAGES_MAJORITY:
             readMessages = (config->n + 1) / 2;
@@ -917,7 +940,7 @@ int main(int argc, char **argv) {
                                         FLAGS_indicus_validate_proofs, FLAGS_indicus_hash_digest,
                                         FLAGS_indicus_verify_deps, FLAGS_indicus_sig_batch,
                                         FLAGS_indicus_max_dep_depth, readDepSize,
-																				false, false,
+																				FLAGS_indicus_read_reply_batch, false,
 																				false, false,
                                         FLAGS_indicus_merkle_branch_factor, failure,
                                         FLAGS_indicus_multi_threading, FLAGS_indicus_batch_verification,
@@ -930,13 +953,17 @@ int main(int argc, char **argv) {
 																				FLAGS_indicus_all_to_all_fb,
 																			  FLAGS_indicus_no_fallback,
 																				FLAGS_indicus_relayP1_timeout,
-																			  false);
+																			  false, 
+                                        FLAGS_batch_optimization, FLAGS_indicus_batch_size,
+                                        FLAGS_num_ops, FLAGS_num_keys, FLAGS_zipf_coefficient,
+                                        FLAGS_signature_batch
+                                        );
 
         client = new indicusstore::Client(config, clientId,
                                           FLAGS_num_shards,
                                           FLAGS_num_groups, closestReplicas, FLAGS_ping_replicas, tport, part,
                                           FLAGS_tapir_sync_commit, readMessages, readQuorumSize,
-                                          params, keyManager, FLAGS_indicus_phase1DecisionTimeout,
+                                          params, keyManager, FLAGS_indicus_phase1DecisionTimeout, rnd, zipf,
 																					FLAGS_indicus_max_consecutive_abstains,
 																					TrueTime(FLAGS_clock_skew, FLAGS_clock_error));
         break;
@@ -1001,6 +1028,7 @@ int main(int argc, char **argv) {
       case BENCH_RETWIS:
       case BENCH_TPCC:
       case BENCH_RW:
+      case BENCH_YCSB:
         if (asyncClient == nullptr) {
           UW_ASSERT(client != nullptr);
           asyncClient = new AsyncAdapterClient(client, FLAGS_message_timeout);
@@ -1008,6 +1036,7 @@ int main(int argc, char **argv) {
         break;
       case BENCH_SMALLBANK_SYNC:
       case BENCH_TPCC_SYNC:
+      case BENCH_YCSB_SYNC:
         if (syncClient == nullptr) {
           UW_ASSERT(client != nullptr);
           syncClient = new SyncClient(client);
@@ -1068,12 +1097,21 @@ int main(int argc, char **argv) {
         break;
       case BENCH_RW:
         UW_ASSERT(asyncClient != nullptr);
-        bench = new rw::RWClient(keySelector, FLAGS_num_ops_txn, FLAGS_rw_read_only,
+        bench = new rw::RWClient(keySelector, FLAGS_num_ops, FLAGS_rw_read_only,
             *asyncClient, *tport, seed,
             FLAGS_num_requests, FLAGS_exp_duration, FLAGS_delay,
             FLAGS_warmup_secs, FLAGS_cooldown_secs, FLAGS_tput_interval,
             FLAGS_abort_backoff, FLAGS_retry_aborted, FLAGS_max_backoff,
-            FLAGS_max_attempts);
+            FLAGS_max_attempts, FLAGS_indicus_batch_size);
+        break;
+      case BENCH_YCSB:
+        UW_ASSERT(asyncClient != nullptr);
+        bench = new ycsb::YCSBClient(keySelector, FLAGS_num_ops, FLAGS_rw_read_only,
+            *asyncClient, *tport, seed,
+            FLAGS_num_requests, FLAGS_exp_duration, FLAGS_delay,
+            FLAGS_warmup_secs, FLAGS_cooldown_secs, FLAGS_tput_interval,
+            FLAGS_abort_backoff, FLAGS_retry_aborted, FLAGS_max_backoff,
+            FLAGS_max_attempts, FLAGS_indicus_batch_size, FLAGS_read_ratio, FLAGS_num_keys);
         break;
       default:
         NOT_REACHABLE();
@@ -1083,20 +1121,44 @@ int main(int argc, char **argv) {
       case BENCH_RETWIS:
       case BENCH_TPCC:
       case BENCH_RW:
-        // async benchmarks
-	      tport->Timer(0, [bench, bdcb]() { bench->Start(bdcb); });
+        tport->Timer(0, [bench, bdcb]() { bench->Start(bdcb, FLAGS_batch_optimization, 0); });
         break;
+      case BENCH_YCSB:
+        //async benchmarks
+	      tport->Timer(0, [bench, bdcb]() { bench->Start(bdcb, FLAGS_batch_optimization, 1); });
+        break;
+      /*
+      case BENCH_YCSB:
+        threads.push_back(new std::thread([bench, bdcb](){
+          tport->Timer(0, [bench, bdcb]() { bench->Start(bdcb, FLAGS_batch_optimization, 1); });
+        }));
+        break;
+      */
       case BENCH_SMALLBANK_SYNC:
-      case BENCH_TPCC_SYNC: {
+      case BENCH_TPCC_SYNC:
+      case BENCH_YCSB_SYNC: {
         SyncTransactionBenchClient *syncBench = dynamic_cast<SyncTransactionBenchClient *>(bench);
         UW_ASSERT(syncBench != nullptr);
         threads.push_back(new std::thread([syncBench, bdcb](){
-            syncBench->Start([](){});
-            while (!syncBench->IsFullyDone()) {
-              syncBench->StartLatency();
-              transaction_status_t result;
-              syncBench->SendNext(&result);
-              syncBench->IncrementSent(result);
+            syncBench->Start([](){}, FLAGS_batch_optimization, 1);
+            if (FLAGS_batch_optimization == false){
+              while (!syncBench->IsFullyDone()) {
+                syncBench->StartLatency();
+                transaction_status_t result;
+                syncBench->SendNext(&result);
+                syncBench->IncrementSent(result);
+              }
+            }
+            else{
+              while (!syncBench->IsFullyDone()) {
+                syncBench->StartLatency();
+                //transaction_status_t result;
+                /*
+                std::vector<transaction_status_t> results;
+                syncBench->SendNext_batch(results);
+                syncBench->IncrementSent_batch(results);
+                */
+              }
             }
             bdcb();
         }));
@@ -1118,11 +1180,13 @@ int main(int argc, char **argv) {
     if (oneShotClient != nullptr) {
       oneShotClients.push_back(oneShotClient);
     }
-    benchClients.push_back(bench);
+    benchClients.push_back(bench); 
   }
 
   if (threads.size() > 0) {
+    Notice("sleep_call_start");
     std::this_thread::sleep_for(std::chrono::milliseconds(250));
+    Notice("sleep_call_end");
   }
 
   tport->Timer(FLAGS_exp_duration * 1000 - 1000, FlushStats);
@@ -1131,7 +1195,12 @@ int main(int argc, char **argv) {
   std::signal(SIGTERM, Cleanup);
   std::signal(SIGINT, Cleanup);
 
+  // WarmupDone or TimeInterval
+  // ラムダ関数(クライアントセット)
+  // FlushStats
   tport->Run();
+
+
 
   Cleanup(0);
 
@@ -1180,5 +1249,6 @@ void FlushStats() {
     }
 
     total.ExportJSON(FLAGS_stats_file);
+    total.Output(FLAGS_exp_duration);
   }
 }

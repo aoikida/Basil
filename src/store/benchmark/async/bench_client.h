@@ -45,12 +45,18 @@ class BenchmarkClient {
       int tputInterval, const std::string &latencyFilename = "");
   virtual ~BenchmarkClient();
 
-  void Start(bench_done_callback bdcb);
+  //変更
+  void Start(bench_done_callback bdcb, bool batchOptimization, bool benchmark);
   void OnReply(int result);
+
+  void OnReply_batch(std::vector<transaction_status_t> results);
 
   void StartLatency();
   virtual void SendNext() = 0;
+  virtual void SendNext_ycsb() = 0;
+  virtual void SendNext_batch() = 0;
   void IncrementSent(int result);
+  void IncrementSent_batch(std::vector<transaction_status_t> results);
   inline bool IsFullyDone() { return done; }
 
   struct Latency_t latency;
@@ -89,6 +95,7 @@ class BenchmarkClient {
   int msSinceStart;
   int opLastInterval;
   bench_done_callback curr_bdcb;
+  bool ycsb;
 };
 
 #endif /* BENCHMARK_CLIENT_H */

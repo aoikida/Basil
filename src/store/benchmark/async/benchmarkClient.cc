@@ -18,7 +18,7 @@
 #include <vector>
 #include <algorithm>
 
-enum phase_t {
+enum phase_t { 
 	WARMUP,
 	MEASURE,
 	COOLDOWN

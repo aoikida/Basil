@@ -45,9 +45,12 @@ class SyncTransactionBenchClient : public BenchmarkClient {
   virtual ~SyncTransactionBenchClient();
 
   void SendNext(transaction_status_t *result);
+  //void SendNext_batch(std::vector<transaction_status_t> results);
  protected:
   virtual SyncTransaction *GetNextTransaction() = 0;
   virtual void SendNext() override;
+  virtual void SendNext_ycsb() override;
+  virtual void SendNext_batch() override;
   inline uint32_t GetTimeout() const { return timeout; } 
 
   SyncClient &client;
