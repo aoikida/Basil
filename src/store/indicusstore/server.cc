@@ -47,6 +47,8 @@
 #include "store/indicusstore/basicverifier.h"
 #include "store/indicusstore/localbatchverifier.h"
 #include "store/indicusstore/sharedbatchverifier.h"
+#include "store/common/backend/pingserver.h"
+#include "store/indicusstore/maxsize.h"
 #include "lib/batched_sigs.h"
 #include <valgrind/memcheck.h>
 
@@ -64,7 +66,6 @@ Server::Server(const transport::Configuration &config, int groupIdx, int idx,
     timeDelta(timeDelta),
     timeServer(timeServer)
      {
-
   ongoing = ongoingMap(100000);
   p1MetaData = p1MetaDataMap(100000);
   p2MetaDatas = p2MetaDataMap(100000);
@@ -86,7 +87,15 @@ Server::Server(const transport::Configuration &config, int groupIdx, int idx,
 
   fprintf(stderr, "Starting Indicus replica. ID: %d, IDX: %d, GROUP: %d\n", id, idx, groupIdx);
   Debug("Starting Indicus replica %d.", id);
-  transport->Register(this, config, groupIdx, idx);
+  //ソケットを作成している
+  //ここでacceptcallbackを経由して、readablecallbackを呼び出している。
+  if (params.batchOptimization){
+    transport->Register_batch(this, config, groupIdx, idx);
+  }
+  else{
+    transport->Register(this, config, groupIdx, idx);
+  }
+  
   _Latency_Init(&committedReadInsertLat, "committed_read_insert_lat");
   _Latency_Init(&verifyLat, "verify_lat");
   _Latency_Init(&signLat, "sign_lat");
@@ -214,6 +223,8 @@ Server::~Server() {
  void Server::ReceiveMessage(const TransportAddress &remote,
        const std::string &type, const std::string &data, void *meta_data) {
 
+  Debug("Server::ReceiveMessage");
+
   if(params.dispatchMessageReceive){
     Debug("Dispatching message handling to Support Main Thread");
     //using this path results in an extra copy
@@ -228,6 +239,26 @@ Server::~Server() {
   }
  }
 
+ void Server::ReceiveMessage_batch(const TransportAddress &remote,
+       const std::vector<std::string> &types, const std::vector<std::string> &datas, void *meta_data) {
+
+  Debug("Server::ReceiveMessage_batch");
+
+  if(params.dispatchMessageReceive){
+    Debug("Dispatching message handling to Support Main Thread");
+    //using this path results in an extra copy
+    //Can I move the data or release the message to avoid duplicates?
+   transport->DispatchTP_main([this, &remote, types, datas, meta_data]() {
+     this->ReceiveMessageInternal_batch(remote, types, datas, meta_data);
+     return (void*) true;
+   });
+   
+  }
+  else{
+    ReceiveMessageInternal_batch(remote, types, datas, meta_data);
+  }
+ }
+
 //Calls function handlers for respective message types.
 // Manages Multithread assignments:
 // 1. mainThreadDispatching: Deserialize messages on thread receiving messages, but dispatch message handling to main worker thread
@@ -236,6 +267,8 @@ Server::~Server() {
 void Server::ReceiveMessageInternal(const TransportAddress &remote,
       const std::string &type, const std::string &data, void *meta_data) {
 
+      //typeがメッセージ
+  Debug("Server::ReceiveMessageInternal");
 
   if (type == read.GetTypeName()) {
 
@@ -261,32 +294,6 @@ void Server::ReceiveMessageInternal(const TransportAddress &remote,
     }
   } else if (type == phase1.GetTypeName()) {
 
-// edit for atomic parallel P1. (OUTDATED)
-    // if(!params.mainThreadDispatching || (params.dispatchMessageReceive && !params.parallel_CCC)){
-    //  phase1.ParseFromString(data);
-    //  HandlePhase1_atomic(remote, phase1);
-    // }
-    // else{
-    //   proto::Phase1 *phase1Copy = GetUnusedPhase1message();
-    //   phase1Copy->ParseFromString(data);
-    //   auto f = [this, &remote, phase1Copy]() {
-    //     this->HandlePhase1_atomic(remote, *phase1Copy);
-    //     return (void*) true;
-    //   };
-    //   // if(params.parallel_CCC){
-    //   //   transport->DispatchTP_noCB(std::move(f));
-    //   // }
-    //   // else
-    //   if(params.dispatchMessageReceive){
-    //     f();
-    //   }
-    //   else{
-    //     Debug("Dispatching HandlePhase1");
-    //     transport->DispatchTP_main(std::move(f));
-    //     //transport->DispatchTP_noCB(f); //use if want to dispatch to all workers
-    //   }
-    // }
-
     //Use only with OCC parallel, not full parallel P1. Suffers from non-atomicity in the latter case
     if(!params.mainThreadDispatching || (params.dispatchMessageReceive && !params.parallel_CCC)){
      phase1.ParseFromString(data);
@@ -304,8 +311,8 @@ void Server::ReceiveMessageInternal(const TransportAddress &remote,
       }
       else{
         Debug("Dispatching HandlePhase1");
-        transport->DispatchTP_main(f);
-        //transport->DispatchTP_noCB(f); //use if want to dispatch to all workers
+        //transport->DispatchTP_main(f);
+        transport->DispatchTP_noCB(f); //use if want to dispatch to all workers
       }
     }
 
@@ -483,6 +490,347 @@ void Server::ReceiveMessageInternal(const TransportAddress &remote,
   }
 }
 
+//Calls function handlers for respective message types.
+// Manages Multithread assignments:
+// 1. mainThreadDispatching: Deserialize messages on thread receiving messages, but dispatch message handling to main worker thread
+// 2. dispatchMessageReceive: Dispatch both message deserialization and message handling to main worker thread.
+//TODO: Full CPU utilization parallelism: Assign all handler functions to different threads.
+void Server::ReceiveMessageInternal_batch(const TransportAddress &remote,
+      const std::vector<std::string> &types, const std::vector<std::string> &datas, void *meta_data) {
+      
+  Debug("Server::ReceiveMessageInternal_batch");
+
+  int batchSize = datas.size();
+
+  std::string data = datas[0];
+
+  std::vector<int> batchSizeArray;
+  std::vector<std::string> typeArray;
+
+  int type_change_point = 0;
+
+  if (batchSize == 1){
+    batchSizeArray.push_back(batchSize);
+    typeArray.push_back(types[0]);
+  }
+  else {
+    for(int i = 1; i < batchSize; i++){
+      if (types[i] != types[i - 1]){
+        typeArray.push_back(types[i - 1]);
+        batchSizeArray.push_back(i - type_change_point);
+        type_change_point = i;
+      }
+    }
+    typeArray.push_back(types[batchSize - 1]);
+    batchSizeArray.push_back(batchSize - type_change_point);
+    if (batchSizeArray.size() == 0){
+      batchSizeArray.push_back(batchSize);
+      typeArray.push_back(types[0]);
+    }
+  }
+
+  Debug("BatchSize : %d \n", batchSize);
+
+  Debug("batchSizeArray.size(): %d \n", batchSizeArray.size());
+
+  for (int i = 0; i < batchSizeArray.size(); i++){
+    Debug("batchSize : %d \n", batchSizeArray[i]);
+  }
+
+  Debug("typeArray.size(): %d \n", typeArray.size());
+
+  for (int i = 0; i < typeArray.size(); i++){
+    Debug("type : %s \n", typeArray[i].c_str());
+  }
+
+  for(int i = 0; i < batchSizeArray.size(); i++){
+    Debug("type : %s \n", typeArray[i].c_str());
+    if (typeArray[i] == read.GetTypeName()) {
+      //if no dispatching OR if dispatching both deser and Handling to 2nd main thread (no workers)
+      if(!params.mainThreadDispatching || (params.dispatchMessageReceive && !params.parallel_reads) ){
+        for (int j = 0; j < batchSizeArray[i]; j++){
+          reads[j].ParseFromString(datas[j]);
+          Debug("READ[%lu:%lu] for key %s with ts %lu.%lu.", reads[j].timestamp().id(),
+              reads[j].req_id(), BytesToHex(reads[j].key(), 16).c_str(),
+              reads[j].timestamp().timestamp(), reads[j].timestamp().id());
+        }
+        const_cast<std::vector<std::string> *>(&datas)->erase(std::cbegin(datas), std::cbegin(datas) + batchSizeArray[i]);
+        HandleRead_batch(remote, reads, batchSizeArray[i]);
+      }
+      //if dispatching to second main or other workers
+      else{
+        proto::Read readCopies [MAX_MESSAGE_SIZE];
+        for(int j = 0; j < batchSizeArray[i]; j++){
+          readCopies[j].ParseFromString(datas[j]);
+        }
+        const_cast<std::vector<std::string> *>(&datas)->erase(std::cbegin(datas), std::cbegin(datas) + batchSizeArray[i]);
+        auto f = [this, &remote, readCopies, batchSizeArray, i](){
+          this->HandleRead_batch(remote, const_cast<proto::Read *>(readCopies), batchSizeArray[i]);
+          return (void*) true;
+        };
+
+        if(params.parallel_reads){
+          transport->DispatchTP_noCB(std::move(f));
+        }
+        else{
+          transport->DispatchTP_main(std::move(f));
+        }
+      }
+    }
+    else if (typeArray[i] == phase1.GetTypeName()) {
+      //Use only with OCC parallel, not full parallel P1. Suffers from non-atomicity in the latter case
+      if(!params.mainThreadDispatching || (params.dispatchMessageReceive && !params.parallel_CCC)){
+        for (int j = 0; j < batchSizeArray[i]; j++){
+          phase1s[j].ParseFromString(datas[j]);
+        }
+        const_cast<std::vector<std::string> *>(&datas)->erase(std::cbegin(datas), std::cbegin(datas) + batchSizeArray[i]);
+        HandlePhase1_batch(remote, phase1s, batchSizeArray[i]);
+      }
+      else{
+        proto::Phase1 phase1Copies [MAX_TRANSACTION_SIZE];
+        for(int j = 0; j < batchSizeArray[i]; j++){
+          phase1Copies[j].ParseFromString(datas[j]);
+        }
+        const_cast<std::vector<std::string> *>(&datas)->erase(std::cbegin(datas), std::cbegin(datas) + batchSizeArray[i]);
+
+        auto f = [this, &remote, phase1Copies, batchSizeArray, i](){
+          this->HandlePhase1_batch(remote, const_cast<proto::Phase1 *>(phase1Copies), batchSizeArray[i]);
+          return (void*) true;
+        };
+
+        if(params.dispatchMessageReceive){
+          f();
+        }
+        else{
+          Debug("Dispatching HandlePhase1");
+          transport->DispatchTP_main(f);
+          //transport->DispatchTP_noCB(f); //use if want to dispatch to all workers
+        }
+      }
+    }
+    else if (typeArray[i] == phase2.GetTypeName()) {
+      if(!params.multiThreading && (!params.mainThreadDispatching || params.dispatchMessageReceive)){
+        for (int j = 0; j < batchSizeArray[i]; j++){
+          phase2.ParseFromString(datas[j]);
+          HandlePhase2(remote, phase2);
+        }
+        const_cast<std::vector<std::string> *>(&datas)->erase(std::cbegin(datas), std::cbegin(datas) + batchSizeArray[i]);
+        
+      }
+      else{
+        for (int j = 0; j < batchSizeArray[i]; j++){
+          proto::Phase2* p2 = GetUnusedPhase2message();
+          p2->ParseFromString(datas[j]);
+
+          if(!params.mainThreadDispatching || params.dispatchMessageReceive){
+            HandlePhase2(remote, *p2);
+          }
+          else{
+            auto f = [this, &remote, p2](){
+              this->HandlePhase2(remote, *p2);
+              return (void*) true;
+            };
+            transport->DispatchTP_main(std::move(f));
+          }
+        }
+        const_cast<std::vector<std::string> *>(&datas)->erase(std::cbegin(datas), std::cbegin(datas) + batchSizeArray[i]);
+      }
+    }
+    else if (typeArray[i] == writeback.GetTypeName()) {
+      
+
+      if(!params.multiThreading && (!params.mainThreadDispatching || params.dispatchMessageReceive)){
+        for(int j = 0; j < batchSizeArray[i]; j++){
+          writeback.ParseFromString(datas[j]);
+          HandleWriteback(remote, writeback);
+        }
+        const_cast<std::vector<std::string> *>(&datas)->erase(std::cbegin(datas), std::cbegin(datas) + batchSizeArray[i]);
+      }
+      else{
+        
+        for (int j = 0; j < batchSizeArray[i]; j++){
+          proto::Writeback *wb = GetUnusedWBmessage();
+          wb->ParseFromString(datas[j]);
+          if(!params.mainThreadDispatching || params.dispatchMessageReceive){
+            HandleWriteback(remote, *wb);
+          }
+          else{
+            auto f = [this, &remote, wb](){
+              this->HandleWriteback(remote, *wb);
+              return (void*) true;
+            };
+            transport->DispatchTP_main(std::move(f));
+          }
+        }
+        const_cast<std::vector<std::string> *>(&datas)->erase(std::cbegin(datas), std::cbegin(datas) + batchSizeArray[i]);
+      }
+      
+      /*
+      if(!params.multiThreading && (!params.mainThreadDispatching || params.dispatchMessageReceive)){
+        for (int j = 0; j < batchSizeArray[i]; j++){
+          writebacks[j].ParseFromString(datas[j]);
+        }
+        const_cast<std::vector<std::string> *>(&datas)->erase(std::cbegin(datas), std::cbegin(datas) + batchSizeArray[i]);
+        HandleWriteback_batch(remote, writebacks, batchSizeArray[i]);
+      }
+      else{
+        proto::Writeback writebackCopies [MAX_TRANSACTION_SIZE];
+
+        for(int j = 0; j < batchSizeArray[i]; j++){
+        writebackCopies[j].ParseFromString(datas[j]);
+        }
+        const_cast<std::vector<std::string> *>(&datas)->erase(std::cbegin(datas), std::cbegin(datas) + batchSizeArray[i]);
+        
+        if(!params.mainThreadDispatching || params.dispatchMessageReceive){
+          HandleWriteback_batch(remote, const_cast<proto::Writeback *>(writebackCopies), batchSizeArray[i]);
+        }
+        else{
+          auto f = [this, &remote, writebackCopies, batchSizeArray, i](){
+            this->HandleWriteback_batch(remote, const_cast<proto::Writeback *>(writebackCopies), batchSizeArray[i]);
+            return (void*) true;
+          };
+          transport->DispatchTP_main(std::move(f));
+        }
+      }
+      */
+    }
+    else if (typeArray[i] == abort.GetTypeName()) {
+      abort.ParseFromString(data);
+      HandleAbort(remote, abort);
+    } 
+    else if (typeArray[i] == ping.GetTypeName()) {
+      ping.ParseFromString(data);
+      Debug("Ping is called");
+      HandlePingMessage(this, remote, ping);
+    // Add all Fallback signedMessages
+    }
+    else if (typeArray[i] == phase1FB.GetTypeName()) {
+      if(!params.mainThreadDispatching || (params.dispatchMessageReceive && !params.parallel_CCC)){
+        phase1FB.ParseFromString(data);
+        const_cast<std::vector<std::string> *>(&datas)->erase(std::cbegin(datas), std::cbegin(datas) + batchSizeArray[i]);
+        HandlePhase1FB(remote, phase1FB);
+      }
+      else{
+        proto::Phase1FB *phase1FBCopy = GetUnusedPhase1FBmessage();
+        phase1FBCopy->ParseFromString(data);
+        const_cast<std::vector<std::string> *>(&datas)->erase(std::cbegin(datas), std::cbegin(datas) + batchSizeArray[i]);
+        auto f = [this, &remote, phase1FBCopy]() {
+          this->HandlePhase1FB(remote, *phase1FBCopy);
+          return (void*) true;
+        };
+        if(params.dispatchMessageReceive){
+          f();
+        }
+        else{
+          Debug("Dispatching HandlePhase1");
+          transport->DispatchTP_main(std::move(f));
+          //transport->DispatchTP_noCB(f); //use if want to dispatch to all workers
+        }
+      }
+    } 
+    else if (typeArray[i] == phase2FB.GetTypeName()) {
+
+      if(!params.multiThreading && (!params.mainThreadDispatching || params.dispatchMessageReceive)){
+        phase2FB.ParseFromString(data);
+        HandlePhase2FB(remote, phase2FB);
+      }
+      else{
+        proto::Phase2FB* p2FB = GetUnusedPhase2FBmessage();
+        p2FB->ParseFromString(data);
+        if(!params.mainThreadDispatching || params.dispatchMessageReceive){
+          HandlePhase2FB(remote, *p2FB);
+        }
+        else{
+          auto f = [this, &remote, p2FB](){
+            this->HandlePhase2FB(remote, *p2FB);
+            return (void*) true;
+          };
+          transport->DispatchTP_main(std::move(f));
+        }
+      }
+
+    } 
+    else if (typeArray[i] == invokeFB.GetTypeName()) {
+
+      if((params.all_to_all_fb || !params.multiThreading) && (!params.mainThreadDispatching || params.dispatchMessageReceive)){
+        invokeFB.ParseFromString(data);
+        HandleInvokeFB(remote, invokeFB);
+      }
+      else{
+        proto::InvokeFB* invFB = GetUnusedInvokeFBmessage();
+        invFB->ParseFromString(data);
+        if(!params.mainThreadDispatching || params.dispatchMessageReceive){
+          HandleInvokeFB(remote, *invFB);
+        }
+        else{
+          auto f = [this, &remote, invFB](){
+            this->HandleInvokeFB(remote, *invFB);
+            return (void*) true;
+          };
+          transport->DispatchTP_main(std::move(f));
+        }
+      }
+
+    } 
+    else if (typeArray[i] == electFB.GetTypeName()) {
+
+      if(!params.mainThreadDispatching || params.dispatchMessageReceive){
+        electFB.ParseFromString(data);
+        HandleElectFB(electFB);
+      }
+      else{
+        proto::ElectFB* elFB = GetUnusedElectFBmessage();
+        elFB->ParseFromString(data);
+        auto f = [this, elFB](){
+          this->HandleElectFB(*elFB);
+          return (void*) true;
+        };
+        transport->DispatchTP_main(std::move(f));
+      }
+    } 
+    else if (typeArray[i] == decisionFB.GetTypeName()) {
+
+      if(!params.multiThreading && (!params.mainThreadDispatching || params.dispatchMessageReceive)){
+        decisionFB.ParseFromString(data);
+        HandleDecisionFB(decisionFB);
+      }
+      else{
+        proto::DecisionFB* decFB = GetUnusedDecisionFBmessage();
+        decFB->ParseFromString(data);
+        if(!params.mainThreadDispatching || params.dispatchMessageReceive){
+          HandleDecisionFB(*decFB);
+        }
+        else{
+          auto f = [this, decFB](){
+            this->HandleDecisionFB( *decFB);
+            return (void*) true;
+          };
+          transport->DispatchTP_main(std::move(f));
+        }
+      }
+    } 
+    else if (typeArray[i] == moveView.GetTypeName()) {
+
+      if(!params.mainThreadDispatching || params.dispatchMessageReceive){
+        moveView.ParseFromString(data);
+        HandleMoveView(moveView); //Send only to other replicas
+      }
+      else{
+        proto::MoveView* mvView = GetUnusedMoveView();
+        mvView->ParseFromString(data);
+        auto f = [this, mvView](){
+          this->HandleMoveView( *mvView);
+          return (void*) true;
+        };
+        transport->DispatchTP_main(std::move(f));
+      }
+    } 
+    else {
+      Panic("Received unexpected message type: %s", typeArray[i].c_str());
+    }
+  }   
+}
+
 //Adds new key-value store entry
 //Used for initialization (loading) the key-value store contents at startup.
 //Debug("Stuck at line %d", __LINE__);
@@ -633,7 +981,6 @@ void Server::HandleRead(const TransportAddress &remote,
       });
 
     } else if (params.signatureBatchSize == 1) {
-
       if(params.multiThreading){
         proto::Write* write = new proto::Write(readReply->write());
         auto f = [this, readReply, sendCB = std::move(sendCB), write]()
@@ -653,7 +1000,6 @@ void Server::HandleRead(const TransportAddress &remote,
       }
 
     } else {
-
       if(params.multiThreading){
 
         std::vector<::google::protobuf::Message *> msgs;
@@ -682,9 +1028,208 @@ void Server::HandleRead(const TransportAddress &remote,
       }
     }
   } else {
+    //rwではこのルートを通っている。
     sendCB();
   }
   if(params.mainThreadDispatching && (!params.dispatchMessageReceive || params.parallel_reads)) FreeReadmessage(&msg);
+}
+
+void Server::HandleRead_batch(const TransportAddress &remote,
+     proto::Read *read_msgs, int batch_size) {
+  
+  Debug("Server::HandleRead_batch");
+  //auto sendCB = [this, remoteCopy, readReply, c_id = msg.timestamp().id(), req_id=msg.req_id()]() {
+  //Debug("Sent ReadReply[%lu:%lu]", c_id, req_id);  
+  std::vector<Message *> readReplies;
+  TransportAddress *remoteCopy = remote.clone();
+
+  std::vector<::google::protobuf::Message *> msgs;
+  std::vector<proto::SignedMessage *> smsgs;
+
+  for (int i = 0; i < batch_size; i++){
+    Debug("READ[%lu:%lu] for key %s with ts %lu.%lu.", read_msgs[i].timestamp().id(),
+      read_msgs[i].req_id(), BytesToHex(read_msgs[i].key(), 16).c_str(),
+      read_msgs[i].timestamp().timestamp(), read_msgs[i].timestamp().id());
+    Timestamp ts(read_msgs[i].timestamp());
+
+    if (CheckHighWatermark(ts)) {
+      // ignore request if beyond high watermark
+      Debug("Read timestamp beyond high watermark.");
+      return;
+    }
+
+    std::pair<Timestamp, Server::Value> tsVal;
+    //find committed write value to read from
+    bool exists = store.get(read_msgs[i].key(), ts, tsVal);
+
+    proto::ReadReply* readReply = GetUnusedReadReply();
+    readReply->set_req_id(read_msgs[i].req_id());
+    readReply->set_key(read_msgs[i].key());
+
+    if (exists) {
+      Debug("READ[%lu:%lu] Committed value of length %lu bytes with ts %lu.%lu.",
+        read_msgs[i].timestamp().id(), read_msgs[i].req_id(), tsVal.second.val.length(), tsVal.first.getTimestamp(),
+        tsVal.first.getID());
+      readReply->mutable_write()->set_committed_value(tsVal.second.val);
+      tsVal.first.serialize(readReply->mutable_write()->mutable_committed_timestamp());
+      if (params.validateProofs) {
+        *readReply->mutable_proof() = *tsVal.second.proof;
+      }
+    }
+    
+    //If MVTSO: Read prepared, Set RTS
+    if (occType == MVTSO) {
+  
+      //Sets RTS timestamp. Favors readers commit chances.
+      //Disable if worried about Byzantine Readers DDos, or if one wants to favor writers.
+      Debug("Set up RTS for READ[%lu:%lu]", read_msgs[i].timestamp().id(), read_msgs[i].req_id());
+      auto itr = rts.find(read_msgs[i].key());
+      if(itr != rts.end()){
+        if(ts.getTimestamp() > itr->second ) {
+          rts[read_msgs[i].key()] = ts.getTimestamp();
+        }
+      }
+      else{
+        rts[read_msgs[i].key()] = ts.getTimestamp();
+      }
+      /* update rts */
+      // TODO: For "proper Aborts": how to track RTS by transaction without knowing transaction digest?
+
+      //XXX multiple RTS as set:
+      //  if(params.mainThreadDispatching) rtsMutex.lock();
+      // rts[msg.key()].insert(ts);
+      //  if(params.mainThreadDispatching) rtsMutex.unlock();
+      //XXX single RTS that updates:
+
+
+      //find prepared write to read from
+      /* add prepared deps */
+      
+      if (params.maxDepDepth > -2) {
+        Debug("Look for prepared value to READ[%lu:%lu]", read_msgs[i].timestamp().id(), read_msgs[i].req_id());
+        const proto::Transaction *mostRecent = nullptr;
+
+        //std::pair<std::shared_mutex,std::map<Timestamp, const proto::Transaction *>> &x = preparedWrites[write.key()];
+        auto itr = preparedWrites.find(read_msgs[i].key());
+        if (itr != preparedWrites.end()){
+
+          //std::pair &x = preparedWrites[write.key()];
+          std::shared_lock lock(itr->second.first);
+          if(itr->second.second.size() > 0) {
+
+            // there is a prepared write for the key being read
+            for (const auto &t : itr->second.second) {
+              if (mostRecent == nullptr || t.first > Timestamp(mostRecent->timestamp())) { //TODO: for efficiency only use it if its bigger than the committed write..
+                mostRecent = t.second;
+              }
+            }
+
+            if (mostRecent != nullptr) {
+              std::string preparedValue;
+              for (const auto &w : mostRecent->write_set()) {
+                if (w.key() == read_msgs[i].key()) {
+                  preparedValue = w.value();
+                  break;
+                }
+              }
+
+              Debug("Prepared write with most recent ts %lu.%lu.",
+                  mostRecent->timestamp().timestamp(), mostRecent->timestamp().id());
+              //std::cerr << "Dependency depth: " << (DependencyDepth(mostRecent)) << std::endl;
+              if ((params.maxDepDepth == -1 || DependencyDepth(mostRecent) <= params.maxDepDepth)) {
+                readReply->mutable_write()->set_prepared_value(preparedValue);
+                *readReply->mutable_write()->mutable_prepared_timestamp() = mostRecent->timestamp();
+                *readReply->mutable_write()->mutable_prepared_txn_digest() = TransactionDigest(*mostRecent, params.hashDigest);
+              }
+            }
+          }
+        }
+      }
+    }
+    readReplies.push_back(readReply);
+  }
+
+  if (params.validateProofs && params.signedMessages){
+    //Debug("Sign Read Reply for READ[%lu:%lu]", read_msgs[i].timestamp().id(), read_msgs[i].req_id());
+    //If readReplyBatch is false then respond immediately, otherwise respect batching policy
+    if (params.readReplyBatch) {
+      for (int i = 0; i < batch_size; i++){
+        if (static_cast<proto::ReadReply*>(readReplies[i])->write().has_committed_value() || (params.verifyDeps && static_cast<proto::ReadReply*>(readReplies[i])->write().has_prepared_value())){
+          proto::Write* write = new proto::Write(static_cast<proto::ReadReply*>(readReplies[i])->write());
+          SignMessage(write, keyManager->GetPrivateKey(id), id, static_cast<proto::ReadReply*>(readReplies[i])->mutable_signed_write());
+          delete write;
+        }
+      }
+      this->transport->SendMessage_batch(this, *remoteCopy, readReplies);
+      Debug("indicus::SendMessage_batch end");
+      delete remoteCopy;
+    }
+    else if (params.signatureBatchSize == 1) {
+      if(params.multiThreading){
+        auto f = [this, readReplies, batch_size, remoteCopy]()
+        {
+          for (int i = 0; i < batch_size; i++){
+            if (static_cast<proto::ReadReply*>(readReplies[i])->write().has_committed_value() || (params.verifyDeps && static_cast<proto::ReadReply*>(readReplies[i])->write().has_prepared_value())){
+              proto::Write* write = new proto::Write(static_cast<proto::ReadReply*>(readReplies[i])->write());
+              SignMessage(write, keyManager->GetPrivateKey(id), id, static_cast<proto::ReadReply*>(readReplies[i])->mutable_signed_write());
+              delete write;
+            }
+          }
+          this->transport->SendMessage_batch(this, *remoteCopy, readReplies);
+          delete remoteCopy;
+          return (void*) true;
+        };
+
+        transport->DispatchTP_noCB(std::move(f));
+      }
+      else{
+        
+        for (int i = 0; i < batch_size; i++){
+          if (static_cast<proto::ReadReply*>(readReplies[i])->write().has_committed_value() || (params.verifyDeps && static_cast<proto::ReadReply*>(readReplies[i])->write().has_prepared_value())){
+            proto::Write* write = new proto::Write(static_cast<proto::ReadReply*>(readReplies[i])->write());
+            SignMessage(write, keyManager->GetPrivateKey(id), id, static_cast<proto::ReadReply*>(readReplies[i])->mutable_signed_write());
+            delete write;
+          }
+        }
+        this->transport->SendMessage_batch(this, *remoteCopy, readReplies);
+        Debug("indicus::SendMessage_batch end");
+        delete remoteCopy;
+        
+      }
+    }
+    else {
+      if(params.multiThreading){
+        // not implemented yet
+        /*
+        std::vector<::google::protobuf::Message *> msgs;
+        proto::Write* write = new proto::Write(readReply->write()); //TODO might want to add re-use buffer
+        msgs.push_back(write);
+        std::vector<proto::SignedMessage *> smsgs;
+        smsgs.push_back(readReply->mutable_signed_write());
+
+        SignMessages(msgs, keyManager->GetPrivateKey(id), id, smsgs, params.merkleBranchFactor);
+        delete write;
+        transport->DispatchTP_noCB(std::move(f));
+        */
+      }
+      else{
+        std::vector<::google::protobuf::Message *> msgs;
+        std::vector<proto::SignedMessage *> smsgs;
+        for (int i = 0; i < batch_size; i++){
+          proto::Write write(static_cast<proto::ReadReply*>(readReplies[i])->write());
+          msgs.push_back(&write);
+          smsgs.push_back(static_cast<proto::ReadReply*>(readReplies[i])->mutable_signed_write());
+        }
+        SignMessages(msgs, keyManager->GetPrivateKey(id), id, smsgs, params.merkleBranchFactor);
+        this->transport->SendMessage_batch(this, *remoteCopy, readReplies);
+        delete remoteCopy;
+      }
+    }
+  }
+  else {
+    this->transport->SendMessage_batch(this, *remoteCopy, readReplies);
+    delete remoteCopy;
+  }
 }
 
 //////////////////////
@@ -807,6 +1352,8 @@ void Server::ForwardPhase1(proto::Phase1 &msg){
   uint64_t nextReplica = (idx + 1) % config.n;
   transport->SendMessageToReplica(this, groupIdx, nextReplica, msg);
 }
+
+
 
 //Helper function to elect a replica leader responsible for completing the commit protocol of a tx if no client leader finishes it 
 //Actual garbage collection (finishing commit protocol NOT currently implemented)
@@ -983,6 +1530,162 @@ void Server::HandlePhase1(const TransportAddress &remote,
   HandlePhase1CB(&msg, result, committedProof, txnDigest, remote, abstain_conflict, replicaGossip);
 }
 
+void Server::HandlePhase1_batch(const TransportAddress &remote,
+    proto::Phase1 *msgs, int batch_size) {
+  //dummyTx = msg.txn(); //PURELY TESTING PURPOSES!!: NOTE WARNING
+  std::vector<std::string> txnDigests;
+  std::vector<proto::ConcurrencyControl::Result> results;
+  std::vector<const proto::CommittedProof *> committedProofs;
+  const proto::Transaction *abstain_conflict = nullptr;
+  std::vector<proto::Transaction *> txnBatch;
+  std::vector<proto::Phase1> msgs_copy;
+
+  bool replicaGossip = false;
+  if (params.replicaGossip){
+    replicaGossip = true;
+  }
+
+  Debug("HandlePhase1_batch : req_id():%d", msgs[0].req_id());
+
+  for(int i = 0; i < batch_size; i++){
+    std::string txnDigest = TransactionDigest(msgs[i].txn(), params.hashDigest); //could parallelize it too hypothetically
+    txnDigests.push_back(txnDigest);
+    //if(waiting.count(txnDigest) > 0){ Panic("P1 did eventually arrive");}
+    Debug("HandlePhase1_batch : req_id():%d", msgs[0].req_id());
+    Debug("PHASE1[%lu:%lu][%s] with ts %lu.", msgs[i].txn().client_id(),
+        msgs[i].txn().client_seq_num(), BytesToHex(txnDigest, 16).c_str(),
+        msgs[i].txn().timestamp().timestamp());
+    proto::ConcurrencyControl::Result result;
+    const proto::CommittedProof *committedProof;
+    if(msgs[i].has_crash_failure() && msgs[i].crash_failure()){
+      stats.Increment("total_crash_received", 1);
+    }
+    //add to ongoing, lock ongoing and send to all when done.
+    p1MetaDataMap::const_accessor c;
+    //std::cerr << "[Normal] acquire lock for txn: " << BytesToHex(txnDigest, 64) << std::endl;
+    //p1MetaDataMap::const_accessor c;
+    p1MetaData.insert(c, txnDigest);  //TODO: next: make P1 part of ongoing? same for P2?
+    //c->second.P1meta_mutex.lock();
+    bool hasP1 = c->second.hasP1;
+
+    if(hasP1 && replicaGossip){  // If P1 has already been received and current message is a gossip one, do nothing.
+    //Do not need to reply to forwarded P1. If adding replica GC -> want to forward it to leader.
+    //Inform_P1_GC_Leader(proto::Phase1Reply &reply, proto::Transaction &txn, std::string &txnDigest, int64_t grpLeader);
+    }
+    else if(hasP1){ // If P1 has already been received (sent by a fallback) and current message is from original client, then only inform client of blocked dependencies so it can issue fallbacks of its own
+      result = c->second.result;
+      // need to check if result is WAIT: if so, need to add to waitingDeps original client..
+        //(TODO) Instead: use original client list and store pairs <txnDigest, <reqID, remote>>
+      if(result == proto::ConcurrencyControl::WAIT){
+        ManageDependencies(txnDigest, msgs[i].txn(), remote, msgs[i].req_id());
+      }
+
+      if (result == proto::ConcurrencyControl::ABORT) {
+        committedProof = c->second.conflict;
+        UW_ASSERT(committedProof != nullptr);
+      }
+      c.release();
+      results.push_back(result);
+      committedProofs.push_back(committedProof);
+    }
+    else{ // FIRST P1 request received (i.e. from original client). Gossip if desired and check whether dependencies are valid
+    Debug("HandlePhase1_batch : req_id():%d", msgs[0].req_id());
+      c.release();
+      if(params.replicaGossip) ForwardPhase1(msgs[i]); //If params.replicaGossip is enabled then set msg.replica_gossip to true and forward.
+      if(!replicaGossip) msgs[i].set_replica_gossip(false); //unset msg.replica_gossip (which we possibly just set to foward) if the message was received by the client
+
+      if (params.validateProofs && params.signedMessages && params.verifyDeps) {
+        for (const auto &dep : msgs[i].txn().deps()) {
+      //  for (const auto &dep : txn->deps()) {
+          if (!dep.has_write_sigs()) {
+            Debug("Dep for txn %s missing signatures.", BytesToHex(txnDigest, 16).c_str());
+            if(params.mainThreadDispatching && (!params.dispatchMessageReceive || params.parallel_CCC)) FreePhase1message(&(msgs[i]));
+            return;
+          }
+          if (!ValidateDependency(dep, &config, params.readDepSize, keyManager, verifier)) {
+            Debug("VALIDATE Dependency failed for txn %s.", BytesToHex(txnDigest, 16).c_str());
+            // safe to ignore Byzantine client
+            if(params.mainThreadDispatching && (!params.dispatchMessageReceive || params.parallel_CCC)) FreePhase1message(&(msgs[i]));
+            return;
+          }
+        }
+      }
+      //current_views[txnDigest] = 0;
+      p2MetaDataMap::accessor p;
+      p2MetaDatas.insert(p, txnDigest);
+      p.release();
+
+      proto::Transaction *txn = msgs[i].release_txn();
+
+      txnBatch.push_back(txn);
+
+      // if(params.mainThreadDispatching) ongoingMutex.lock();
+      ongoingMap::accessor b;
+      ongoing.insert(b, std::make_pair(txnDigest, txn));
+      b.release();
+      //normal.insert(txnDigest);
+      //std::cerr << "[N] Added tx to ongoing: " << BytesToHex(txnDigest, 16) << std::endl;
+      // //ongoing[txnDigest] = txn;
+      // if(params.mainThreadDispatching) ongoingMutex.unlock();
+      Timestamp retryTs;
+      Debug("HandlePhase1_batch : req_id():%d", msgs[0].req_id());
+      //この条件に合致するのは、parallel_CCCがtrueかつ、mainthreadDispathching がtrue
+      if(!params.parallel_CCC || !params.mainThreadDispatching){
+        //ここを通るはず
+        result = DoOCCCheck(msgs[i].req_id(), remote, txnDigest, *txn, retryTs,
+          committedProof, abstain_conflict, false, replicaGossip); //forwarded messages dont need to be treated as original client.
+        BufferP1Result(result, committedProof, txnDigest);
+        results.push_back(result);
+        committedProofs.push_back(committedProof);
+      }
+    }
+    msgs_copy.push_back(msgs[i]);
+  }
+  Debug("HandlePhase1_batch : req_id():%d", msgs[0].req_id());
+  if (params.no_fallback || !replicaGossip){
+    if (params.parallel_CCC && params.mainThreadDispatching){
+      
+        auto f = [this, msgs_copy, remote_ptr = &remote, txnDigests, txnBatch, committedProofs, abstain_conflict, replicaGossip, batch_size]() mutable {
+          std::vector<proto::ConcurrencyControl::Result> results;
+          for(int i = 0; i < batch_size; i++){
+            Timestamp retryTs;
+            //check if concurrently committed/aborted already, and if so return
+            ongoingMap::const_accessor b;
+            if(!ongoing.find(b, txnDigests[i])){
+              Debug("Already concurrently Committed/Aborted txn[%s]", BytesToHex(txnDigests[i], 16).c_str());
+              return (void*) false;
+            }
+            b.release();
+            Debug("starting occ check for txn: %s", BytesToHex(txnDigests[i], 16).c_str());
+            Debug("HandlePhase1_batch : req_id():%d", msgs_copy[i].req_id());
+            const indicusstore::proto::CommittedProof * committedProof;
+            proto::ConcurrencyControl::Result *result = new proto::ConcurrencyControl::Result(this->DoOCCCheck(msgs_copy[i].req_id(),
+                *remote_ptr, txnDigests[i], *(txnBatch[i]), retryTs, committedProof, abstain_conflict, false, replicaGossip));
+            Debug("end occ check");
+            Debug("HandlePhase1_batch : req_id():%d", msgs_copy[i].req_id());
+            results.push_back(*result);
+            BufferP1Result(*result, committedProof, txnDigests[i]);
+            committedProofs.push_back(committedProof);
+            //c->second.P1meta_mutex.unlock();
+            //std::cerr << "[Normal] release lock for txn: " << BytesToHex(txnDigest, 64) << std::endl;
+          }
+          for (int i = 0; i < batch_size; i++){
+            Debug("HandlePhase1_batch : req_id():%d",msgs_copy[i].req_id());
+          }
+          HandlePhase1CB_batch_multi(msgs_copy, results, committedProofs, txnDigests, *remote_ptr, abstain_conflict, replicaGossip);
+
+          return (void*) true;
+          
+        };
+        transport->DispatchTP_noCB(std::move(f));
+        return;
+    }
+    else {
+      HandlePhase1CB_batch(msgs, results, committedProofs, txnDigests, remote, abstain_conflict, replicaGossip);
+    }
+  }
+}
+
 //Called after Concurrency Control Check completes
 //Sends P1Reply to client. Sends no reply if P1 receives was simply forwarded by another replica.
 //TODO: move p1Decision into this function (not sendp1: Then, can unlock here.)
@@ -1001,6 +1704,77 @@ void Server::HandlePhase1CB(proto::Phase1 *msg, proto::ConcurrencyControl::Resul
     SendPhase1Reply(msg->req_id(), result, committedProof, txnDigest, &remote, abstain_conflict);
   }
   if(params.mainThreadDispatching && (!params.dispatchMessageReceive || params.parallel_CCC)) FreePhase1message(msg);
+}
+
+//Called after Concurrency Control Check completes
+//Sends P1Reply to client. Sends no reply if P1 receives was simply forwarded by another replica.
+//TODO: move p1Decision into this function (not sendp1: Then, can unlock here.)
+void Server::HandlePhase1CB_batch(proto::Phase1 *msgs, std::vector<proto::ConcurrencyControl::Result> &results,
+  std::vector<const proto::CommittedProof*> &committedProofs, std::vector<std::string> &txnDigests, const TransportAddress &remote, const proto::Transaction *abstain_conflict, bool replicaGossip){
+  
+  Debug("HandlePhase1CB_batch start");
+  std::vector<uint64_t> reqIds;
+
+  int batchSize = results.size();
+
+  for(int i = 0; i < batchSize; i++){
+    reqIds.push_back(msgs[i].req_id());
+    Debug("HandlePhase1CB_batch : req_id : %d\n", reqIds[i]);
+    if (results[i] == proto::ConcurrencyControl::WAIT || replicaGossip){
+      results.erase(results.begin()+i);
+      committedProofs.erase(committedProofs.begin()+i);
+      txnDigests.erase(txnDigests.begin()+i);
+      reqIds.erase(reqIds.begin()+i);
+      batchSize--;
+    }
+  }
+
+  if (batchSize == 0){
+    return;
+  }
+  else {
+    SendPhase1Reply_batch(reqIds, results, committedProofs, txnDigests, &remote, abstain_conflict);
+  }
+
+}
+
+void Server::HandlePhase1CB_batch_multi(std::vector<proto::Phase1> &msgs, std::vector<proto::ConcurrencyControl::Result> &results,
+  std::vector<const proto::CommittedProof*> &committedProofs, std::vector<std::string> &txnDigests, const TransportAddress &remote, const proto::Transaction *abstain_conflict, bool replicaGossip){
+
+ //replicagossipがtrueになっている。
+  
+  Debug("HandlePhase1CB_batch start");
+  std::vector<uint64_t> reqIds;
+
+  int batchSize = results.size();
+
+  int wait_tx = 0;
+
+  for (int i = 0; i < batchSize; i++){
+    reqIds.push_back(msgs[i].req_id());
+    Debug("HandlePhase1CB_batch : req_id : %d\n", reqIds[i]);
+  }
+
+  for(int i = 0; i < results.size(); i++){
+    if (results[i] == proto::ConcurrencyControl::WAIT || replicaGossip){
+      Debug("results[i] == proto::ConcurrencyControl::WAIT || replicaGossip");
+      results.erase(results.begin() + i - wait_tx);
+      committedProofs.erase(committedProofs.begin() + i - wait_tx);
+      txnDigests.erase(txnDigests.begin() + i - wait_tx);
+      reqIds.erase(reqIds.begin() + i - wait_tx);
+      batchSize--;
+      wait_tx++;
+    }
+  }
+
+  if (batchSize == 0){
+    Debug("if");
+  }
+  else {
+    Debug("else");
+    SendPhase1Reply_batch(reqIds, results, committedProofs, txnDigests, &remote, abstain_conflict);
+  }
+
 }
 
 //Sends a signed P2 reply to the client, containing Commit/Abort respectively. 
@@ -1372,8 +2146,10 @@ void Server::WritebackCallback(proto::Writeback *msg, const std::string* txnDige
       // completing.insert(z, *txnDigest);
       // //z->second.lock();
       // z.release();
+
       if(committed.find(*txnDigest) != committed.end() || aborted.find(*txnDigest) != aborted.end()){
         //duplicate, do nothing. TODO: Forward to all interested clients and empty it?
+        Debug("duplicate transaction");
       }
       else if (msg->decision() == proto::COMMIT) {
         stats.Increment("total_transactions", 1);
@@ -1399,18 +2175,18 @@ void Server::WritebackCallback(proto::Writeback *msg, const std::string* txnDige
         stats.Increment("total_transactions_abort", 1);
         Debug("WRITEBACK[%s] successfully aborting.", BytesToHex(*txnDigest, 16).c_str());
         //msg->set_allocated_txn(txn); //dont need to set since client will?
-        writebackMessages[*txnDigest] = *msg;  //Only necessary for fallback... (could avoid storing these, if one just replied with a p2 vote instea - but that is not as responsive)
+        //writebackMessages[*txnDigest] = *msg;  //Only necessary for fallback... (could avoid storing these, if one just replied with a p2 vote instea - but that is not as responsive)
         ///CAUTION: msg might no longer hold txn; could have been released in HanldeWriteback
 
         Abort(*txnDigest);
       }
 
-      if(params.multiThreading || params.mainThreadDispatching){
+      if(params.multiThreading || (params.mainThreadDispatching && !params.dispatchMessageReceive)){
         FreeWBmessage(msg);
       }
+      
       return (void*) true;
   };
-
  if(params.multiThreading && params.mainThreadDispatching && params.dispatchCallbacks){
    transport->DispatchTP_main(std::move(f));
  }
@@ -1425,6 +2201,7 @@ void Server::WritebackCallback(proto::Writeback *msg, const std::string* txnDige
 //Dispatches verification to worker threads if multiThreading enabled
 void Server::HandleWriteback(const TransportAddress &remote,
     proto::Writeback &msg) {
+  Debug("handlewriteback start");
   stats.Increment("total_writeback_received", 1);
   //simulating failures in local experiment
   // fail_writeback++;
@@ -1499,7 +2276,7 @@ void Server::HandleWriteback(const TransportAddress &remote,
 
   //Verifying signatures
   //XXX batchVerification branches are currently deprecated
-  if (params.validateProofs ) {
+  if (params.validateProofs) {
       if(params.multiThreading){
 
           Debug("1: TAKING MULTITHREADING BRANCH, generating MCB");
@@ -1572,16 +2349,15 @@ void Server::HandleWriteback(const TransportAddress &remote,
 
           else if (msg.decision() == proto::ABORT && msg.has_conflict()) {
              stats.Increment("total_transactions_fast_Abort_conflict", 1);
-
+              Debug("2: transactions_fast_Abort_conflict");
               std::string committedTxnDigest = TransactionDigest(msg.conflict().txn(),
                   params.hashDigest);
               asyncValidateCommittedConflict(msg.conflict(), &committedTxnDigest, txn,
                     txnDigest, params.signedMessages, keyManager, &config, verifier,
-                    std::move(mcb), transport, true, params.batchVerification);
+                    std::move(mcb), transport, params.multiThreading, params.batchVerification);
               return;
           }
           else if (params.signedMessages) {
-
              Debug("WRITEBACK[%s] decision %d, has_p1_sigs %d, has_p2_sigs %d, and"
                  " has_conflict %d.", BytesToHex(*txnDigest, 16).c_str(),
                  msg.decision(), msg.has_p1_sigs(), msg.has_p2_sigs(), msg.has_conflict());
@@ -1686,11 +2462,277 @@ void Server::HandleWriteback(const TransportAddress &remote,
                 msg.decision(), msg.has_p1_sigs(), msg.has_p2_sigs(), msg.has_conflict());
             return WritebackCallback(&msg, txnDigest, txn, (void*) false);
           }
-        }
+       }
 
   }
-
   WritebackCallback(&msg, txnDigest, txn, (void*) true);
+}
+
+void Server::HandleWriteback_batch(const TransportAddress &remote,
+     proto::Writeback *msgs, int batch_size) {
+  stats.Increment("total_writeback_received", 1);
+  //simulating failures in local experiment
+  // fail_writeback++;
+  // if(fail_writeback %2 == 1){
+  //   return;
+  // }
+
+  for(int i = 0; i < batch_size; i++){
+    proto::Transaction *txn;
+    const std::string *txnDigest;
+    std::string computedTxnDigest;
+    if (!msgs[i].has_txn() && !msgs[i].has_txn_digest()) {
+      Debug("WRITEBACK message contains neither txn nor txn_digest.");
+      return WritebackCallback(&msgs[i], txnDigest, txn, (void*) false);
+    }
+
+    if (msgs[i].has_txn_digest() ) {
+      txnDigest = &msgs[i].txn_digest();
+
+      if(committed.find(*txnDigest) != committed.end() || aborted.find(*txnDigest) != aborted.end()){
+        Debug("This transaction is already committted or aborted");
+        if(params.multiThreading || (params.mainThreadDispatching && !params.dispatchMessageReceive)){
+          Clean(*txnDigest); //XXX Clean again since client could have added it back to ongoing...
+        }
+        return;  //TODO: Forward to all interested clients and empty it?
+      }
+
+      ongoingMap::const_accessor b;
+      auto txnItr = ongoing.find(b, msgs[i].txn_digest());
+      if(txnItr){
+        txn = b->second;
+        b.release();
+      }
+      else{
+        b.release();
+        if(msgs[i].has_txn()){
+          txn = msgs[i].release_txn();
+          // check that digest and txn match..
+          if(*txnDigest !=TransactionDigest(*txn, params.hashDigest)) return;
+        }
+        else{
+          Debug("Writeback[%s] message does not contain txn, but have not seen"
+              " txn_digest previously.", BytesToHex(msgs[i].txn_digest(), 16).c_str());
+          // std::cerr << "Aborting for txn: " << BytesToHex(msg.txn_digest(), 16) << std::endl;
+          // if(normal.count(*txnDigest) > 0){ std::cerr << "was added on normal P1" << std::endl;}
+          // else if(fallback.count(*txnDigest) > 0){ std::cerr << "was added on ExecP1 FB" << std::endl;}
+          // else{ std::cerr << "have not seen p1" << std::endl;}
+          // waiting.insert(msg.txn_digest());
+          //transport->Timer(10000, [this](){Panic("Fail in WB");});
+          Warning("Cannot process Writeback because ongoing does not contain tx for this request. Should not happen with TCP...");
+          //Panic("When using TCP the tx should always be ongoing before doing WB");
+          return WritebackCallback(&msgs[i], txnDigest, txn, (void*) false);
+        }
+      }
+    } else {
+      txn = msgs[i].release_txn();
+      computedTxnDigest = TransactionDigest(msgs[i].txn(), params.hashDigest);
+      txnDigest = &computedTxnDigest;
+
+      if(committed.find(*txnDigest) != committed.end() || aborted.find(*txnDigest) != aborted.end()){
+        Debug("This transaction is already committted or aborted");
+        if(params.multiThreading || (params.mainThreadDispatching && !params.dispatchMessageReceive)){
+          Clean(*txnDigest); //XXX Clean again since client could have added it back to ongoing...
+        }
+        return;  //TODO: Forward to all interested clients and empty it?
+      }
+    }
+
+     Debug("WRITEBACK[%s] with decision %d.", BytesToHex(*txnDigest, 16).c_str(), msgs[i].decision());
+
+     //Verifying signatures
+    //XXX batchVerification branches are currently deprecated
+    if (params.validateProofs) {
+      if(params.multiThreading){
+
+          Debug("1: TAKING MULTITHREADING BRANCH, generating MCB");
+          mainThreadCallback mcb(std::bind(&Server::WritebackCallback, this, &msgs[i],
+            txnDigest, txn, std::placeholders::_1));
+
+          if(params.signedMessages && msgs[i].decision() == proto::COMMIT && msgs[i].has_p1_sigs()){
+            stats.Increment("total_transactions_fast_commit", 1);
+            int64_t myProcessId;
+            proto::ConcurrencyControl::Result myResult;
+            LookupP1Decision(*txnDigest, myProcessId, myResult);
+
+            if(params.batchVerification){
+              Debug("2: Taking batch branch p1 commit");
+              asyncBatchValidateP1Replies(msgs[i].decision(),
+                    true, txn, txnDigest, msgs[i].p1_sigs(), keyManager, &config, myProcessId,
+                    myResult, verifier, std::move(mcb), transport, true);
+            }
+            else{
+              Debug("2: Taking non-batch branch p1 commit");
+              asyncValidateP1Replies(msgs[i].decision(),
+                  true, txn, txnDigest, msgs[i].p1_sigs(), keyManager, &config, myProcessId,
+                  myResult, verifier, std::move(mcb), transport, true);
+            }
+            return;
+          }
+          else if(params.signedMessages && msgs[i].decision() == proto::ABORT && msgs[i].has_p1_sigs()){
+            stats.Increment("total_transactions_fast_Abort_sigs", 1);
+            int64_t myProcessId;
+            proto::ConcurrencyControl::Result myResult;
+            LookupP1Decision(*txnDigest, myProcessId, myResult);
+
+            if(params.batchVerification){
+              Debug("2: Taking batch branch p1 abort");
+              asyncBatchValidateP1Replies(msgs[i].decision(),
+                    true, txn, txnDigest, msgs[i].p1_sigs(), keyManager, &config, myProcessId,
+                    myResult, verifier, std::move(mcb), transport, true);
+            }
+            else{
+              Debug("2: Taking non-batch branch p1 abort");
+            asyncValidateP1Replies(msgs[i].decision(),
+                  true, txn, txnDigest, msgs[i].p1_sigs(), keyManager, &config, myProcessId,
+                  myResult, verifier, std::move(mcb), transport, true);
+            }
+            return;
+          }
+
+          else if (params.signedMessages && msgs[i].has_p2_sigs()) {
+             stats.Increment("total_transactions_slow", 1);
+              // require clients to include view for easier matching
+              if(!msgs[i].has_p2_view()) return;
+              int64_t myProcessId;
+              proto::CommitDecision myDecision;
+              LookupP2Decision(*txnDigest, myProcessId, myDecision);
+
+              if(params.batchVerification){
+                Debug("2: Taking batch branch p2");
+                asyncBatchValidateP2Replies(msgs[i].decision(), msgs[i].p2_view(),
+                      txn, txnDigest, msgs[i].p2_sigs(), keyManager, &config, myProcessId,
+                      myDecision, verifier, std::move(mcb), transport, true);
+              }
+              else{
+                Debug("2: Taking non-batch branch p2");
+                asyncValidateP2Replies(msgs[i].decision(), msgs[i].p2_view(),
+                      txn, txnDigest, msgs[i].p2_sigs(), keyManager, &config, myProcessId,
+                      myDecision, verifier, std::move(mcb), transport, true);
+              }
+              return;
+          }
+
+          else if (msgs[i].decision() == proto::ABORT && msgs[i].has_conflict()) {
+             stats.Increment("total_transactions_fast_Abort_conflict", 1);
+
+              std::string committedTxnDigest = TransactionDigest(msgs[i].conflict().txn(),
+                  params.hashDigest);
+              asyncValidateCommittedConflict(msgs[i].conflict(), &committedTxnDigest, txn,
+                    txnDigest, params.signedMessages, keyManager, &config, verifier,
+                    std::move(mcb), transport, true, params.batchVerification);
+              return;
+          }
+          else if (params.signedMessages) {
+
+             Debug("WRITEBACK[%s] decision %d, has_p1_sigs %d, has_p2_sigs %d, and"
+                 " has_conflict %d.", BytesToHex(*txnDigest, 16).c_str(),
+                 msgs[i].decision(), msgs[i].has_p1_sigs(), msgs[i].has_p2_sigs(), msgs[i].has_conflict());
+             return WritebackCallback(&msgs[i], txnDigest, txn, (void*) false);;
+          }
+
+      }
+      //If I make the else case use the async function too, then I can collapse the duplicate code here
+      //and just pass params.multiThreading as argument...
+      //Currently NOT doing that because the async version does additional copies (binds) that are avoided in the single threaded code.
+      else{
+
+          if (params.signedMessages && msgs[i].decision() == proto::COMMIT && msgs[i].has_p1_sigs()) {
+            int64_t myProcessId;
+            proto::ConcurrencyControl::Result myResult;
+            LookupP1Decision(*txnDigest, myProcessId, myResult);
+
+            if(params.batchVerification){
+              mainThreadCallback mcb(std::bind(&Server::WritebackCallback, this, &msgs[i], txnDigest, txn, std::placeholders::_1));
+              asyncBatchValidateP1Replies(proto::COMMIT,
+                    true, txn, txnDigest,msgs[i].p1_sigs(), keyManager, &config, myProcessId,
+                    myResult, verifier, std::move(mcb), transport, false);
+              return;
+            }
+            else{
+              if (!ValidateP1Replies(proto::COMMIT, true, txn, txnDigest, msgs[i].p1_sigs(),
+                    keyManager, &config, myProcessId, myResult, verifyLat, verifier)) {
+                Debug("WRITEBACK[%s] Failed to validate P1 replies for fast commit.",
+                    BytesToHex(*txnDigest, 16).c_str());
+                return WritebackCallback(&msgs[i], txnDigest, txn, (void*) false);
+              }
+            }
+          }
+          else if (params.signedMessages && msgs[i].decision() == proto::ABORT && msgs[i].has_p1_sigs()) {
+            int64_t myProcessId;
+            proto::ConcurrencyControl::Result myResult;
+            LookupP1Decision(*txnDigest, myProcessId, myResult);
+
+            if(params.batchVerification){
+              mainThreadCallback mcb(std::bind(&Server::WritebackCallback, this, &msgs[i], txnDigest, txn, std::placeholders::_1));
+              asyncBatchValidateP1Replies(proto::ABORT,
+                    true, txn, txnDigest,msgs[i].p1_sigs(), keyManager, &config, myProcessId,
+                    myResult, verifier, std::move(mcb), transport, false);
+              return;
+            }
+            else{
+              if (!ValidateP1Replies(proto::ABORT, true, txn, txnDigest, msgs[i].p1_sigs(),
+                    keyManager, &config, myProcessId, myResult, verifyLat, verifier)) {
+                Debug("WRITEBACK[%s] Failed to validate P1 replies for fast abort.",
+                    BytesToHex(*txnDigest, 16).c_str());
+                return WritebackCallback(&msgs[i], txnDigest, txn, (void*) false);
+              }
+            }
+          }
+
+          else if (params.signedMessages && msgs[i].has_p2_sigs()) {
+            if(!msgs[i].has_p2_view()) return;
+            int64_t myProcessId;
+            proto::CommitDecision myDecision;
+            LookupP2Decision(*txnDigest, myProcessId, myDecision);
+
+
+            if(params.batchVerification){
+              mainThreadCallback mcb(std::bind(&Server::WritebackCallback, this, &msgs[i], txnDigest, txn, std::placeholders::_1));
+              asyncBatchValidateP2Replies(msgs[i].decision(), msgs[i].p2_view(),
+                    txn, txnDigest, msgs[i].p2_sigs(), keyManager, &config, myProcessId,
+                    myDecision, verifier, std::move(mcb), transport, false);
+              return;
+            }
+            else{
+              if (!ValidateP2Replies(msgs[i].decision(), msgs[i].p2_view(), txn, txnDigest, msgs[i].p2_sigs(),
+                    keyManager, &config, myProcessId, myDecision, verifyLat, verifier)) {
+                Debug("WRITEBACK[%s] Failed to validate P2 replies for decision %d.",
+                    BytesToHex(*txnDigest, 16).c_str(), msgs[i].decision());
+                return WritebackCallback(&msgs[i], txnDigest, txn, (void*) false);
+              }
+            }
+
+          } else if (msgs[i].decision() == proto::ABORT && msgs[i].has_conflict()) {
+            std::string committedTxnDigest = TransactionDigest(msgs[i].conflict().txn(),
+                params.hashDigest);
+
+                if(params.batchVerification){
+                  mainThreadCallback mcb(std::bind(&Server::WritebackCallback, this, &msgs[i], txnDigest, txn, std::placeholders::_1));
+                  asyncValidateCommittedConflict(msgs[i].conflict(), &committedTxnDigest, txn,
+                        txnDigest, params.signedMessages, keyManager, &config, verifier,
+                        std::move(mcb), transport, false, params.batchVerification);
+                  return;
+                }
+                else{
+                  if (!ValidateCommittedConflict(msgs[i].conflict(), &committedTxnDigest, txn,
+                        txnDigest, params.signedMessages, keyManager, &config, verifier)) {
+                    Debug("WRITEBACK[%s] Failed to validate committed conflict for fast abort.",
+                        BytesToHex(*txnDigest, 16).c_str());
+                    return WritebackCallback(&msgs[i], txnDigest, txn, (void*) false);
+                }
+
+            }
+          } else if (params.signedMessages) {
+            Debug("WRITEBACK[%s] decision %d, has_p1_sigs %d, has_p2_sigs %d, and"
+                " has_conflict %d.", BytesToHex(*txnDigest, 16).c_str(),
+                msgs[i].decision(), msgs[i].has_p1_sigs(), msgs[i].has_p2_sigs(), msgs[i].has_conflict());
+            return WritebackCallback(&msgs[i], txnDigest, txn, (void*) false);
+          }
+      }
+    }
+    WritebackCallback(&msgs[i], txnDigest, txn, (void*) true);
+  }
 }
 
 // bool Server::ForwardWriteback(const TransportAddress &remote, uint64_t ReqId, const std::string &txnDigest){
@@ -1800,6 +2842,8 @@ proto::ConcurrencyControl::Result Server::DoOCCCheck(
     const proto::Transaction* &abstain_conflict,
     bool fallback_flow, bool replicaGossip) {
 
+  Debug("DoOCCCheck start");
+
   locks_t locks;
   //lock keys to perform an atomic OCC check when parallelizing OCC checks.
   if(params.parallel_CCC){
@@ -1817,11 +2861,12 @@ proto::ConcurrencyControl::Result Server::DoOCCCheck(
   }
 }
 
+
 locks_t Server::LockTxnKeys_scoped(const proto::Transaction &txn) {
     // timeval tv1;
     // gettimeofday(&tv1, 0);
     // int id = std::rand();
-    // std::cerr << "starting locking for id: " << id << std::endl;
+     //std::cerr << "starting locking for id: " << id << std::endl;
     locks_t locks;
 
     auto itr_r = txn.read_set().begin();
@@ -1874,7 +2919,7 @@ locks_t Server::LockTxnKeys_scoped(const proto::Transaction &txn) {
     // timeval tv2;
     // gettimeofday(&tv2, 0);
     // total_lock_time_ms += (tv2.tv_sec * 1000  + tv2.tv_usec / 1000) - (tv1.tv_sec * 1000  + tv1.tv_usec / 1000);
-    // std::cerr << "ending locking for id: " << id << std::endl;
+    //std::cerr << "ending locking for id: " << id << std::endl;
     return locks;
 }
 
@@ -2107,6 +3152,7 @@ proto::ConcurrencyControl::Result Server::DoMVTSOOCCCheck(
       txn.timestamp().timestamp(), txn.timestamp().id());
   Timestamp ts(txn.timestamp());
 
+  Debug("reqId:%d", reqId);
 
   preparedMap::const_accessor a;
   bool preparedItr = prepared.find(a, txnDigest);
@@ -2159,6 +3205,7 @@ proto::ConcurrencyControl::Result Server::DoMVTSOOCCCheck(
         std::shared_lock lock(preparedWritesItr->second.first);
         for (const auto &preparedTs : preparedWritesItr->second.second) {
           if (Timestamp(read.readtime()) < preparedTs.first && preparedTs.first < ts) {
+            Debug("reqId:%d", reqId);
             Debug("[%lu:%lu][%s] ABSTAIN wr conflict prepared write for key %s:"
               " this txn's read ts %lu.%lu < prepared ts %lu.%lu < this txn's ts %lu.%lu.",
                 txn.client_id(),
@@ -2347,7 +3394,12 @@ proto::ConcurrencyControl::Result Server::DoMVTSOOCCCheck(
      a.release();
   }
 
+  Debug("reqId:%d", reqId);
+
+
   bool allFinished = ManageDependencies(txnDigest, txn, remote, reqId, fallback_flow, replicaGossip);
+
+   Debug("reqId:%d", reqId);
 
   if (!allFinished) {
     stats.Increment("cc_waits", 1);
@@ -2355,6 +3407,22 @@ proto::ConcurrencyControl::Result Server::DoMVTSOOCCCheck(
   } else {
     return CheckDependencies(txn);
   }
+  
+  
+  /*
+  bool allFinished = false;
+
+  while(!allFinished){
+    allFinished = ManageDependencies(txnDigest, txn, remote, reqId, fallback_flow, replicaGossip);
+    if (!allFinished){
+      //backoff
+      Debug("backoff");
+      usleep(1000000);
+    }
+  }
+
+  return CheckDependencies(txn);
+  */
 }
 
 //TODO: relay Deeper depth when result is already wait. (If I always re-did the P1 it would be handled)
@@ -2387,7 +3455,6 @@ bool Server::ManageDependencies(const std::string &txnDigest, const proto::Trans
              txn.client_id(), txn.client_seq_num(),
              BytesToHex(txnDigest, 16).c_str(),
              BytesToHex(dep.write().prepared_txn_digest(), 16).c_str());
-
          //XXX start RelayP1 to initiate Fallback handling
 
          if(!params.no_fallback && true && !replicaGossip){ //do not send relay if it is a gossiped message. Unless we are doinig replica leader gargabe Collection (unimplemented)
@@ -2440,10 +3507,9 @@ bool Server::ManageDependencies(const std::string &txnDigest, const proto::Trans
       // if(currently_completing) //z->second.unlock();
       // z.release();
      }
-
       //if(params.mainThreadDispatching) dependentsMutex.unlock();
       if(params.mainThreadDispatching) waitingDependenciesMutex.unlock();
-  }
+  } 
 
   return allFinished;
 }
@@ -2515,6 +3581,7 @@ void Server::Prepare(const std::string &txnDigest,
     if (IsKeyOwned(write.key())) {
       std::pair<std::shared_mutex,std::map<Timestamp, const proto::Transaction *>> &x = preparedWrites[write.key()];
       std::unique_lock lock(x.first);
+      // x.second(preparedWrites)にpWrite(今回追加するwrite)を挿入する
       x.second.insert(pWrite);
       // std::unique_lock lock(preparedWrites[write.key()].first);
       // preparedWrites[write.key()].second.insert(pWrite);
@@ -2536,6 +3603,8 @@ void Server::GetCommittedWrites(const std::string &key, const Timestamp &ts,
 
 void Server::Commit(const std::string &txnDigest, proto::Transaction *txn,
       proto::GroupedSignatures *groupedSigs, bool p1Sigs, uint64_t view) {
+
+  Debug("Commit");
 
   Timestamp ts(txn->timestamp());
 
@@ -2622,12 +3691,14 @@ void Server::Commit(const std::string &txnDigest, proto::Transaction *txn,
   Clean(txnDigest);
   CheckDependents(txnDigest);
   CleanDependencies(txnDigest);
+
 }
 
 void Server::Abort(const std::string &txnDigest) {
-   //if(params.mainThreadDispatching) abortedMutex.lock();
+  //if(params.mainThreadDispatching) abortedMutex.lock();
+  Debug("abort");
   aborted.insert(txnDigest);
-   //if(params.mainThreadDispatching) abortedMutex.unlock();
+  //if(params.mainThreadDispatching) abortedMutex.unlock();
   Clean(txnDigest);
   CheckDependents(txnDigest);
   CleanDependencies(txnDigest);
@@ -2915,7 +3986,7 @@ void Server::BufferP1Result(proto::ConcurrencyControl::Result &result,
       if(result != proto::ConcurrencyControl::WAIT){
         //If a result was already loggin in parallel, adopt it.
         if(c->second.result != proto::ConcurrencyControl::WAIT){
-          //std::cerr << "Path[" << fb << "] Tried replacing result: " << c->second.result << " with result:" << result << " for txn: " << BytesToHex(txnDigest, 64) << std::endl;
+          std::cerr << "Path[" << fb << "] Tried replacing result: " << c->second.result << " with result:" << result << " for txn: " << BytesToHex(txnDigest, 64) << std::endl;
           result = c->second.result;
           conflict = c->second.conflict;
           // Panic("Should not be replacing");
@@ -3021,6 +4092,87 @@ void Server::SendPhase1Reply(uint64_t reqId,
   sendCB();
 }
 
+void Server::SendPhase1Reply_batch(std::vector<uint64_t> &reqIds,
+    std::vector<proto::ConcurrencyControl::Result> &results,
+    std::vector<const proto::CommittedProof *> &conflicts, const std::vector<std::string> &txnDigests,
+    const TransportAddress *remote, const proto::Transaction * abstain_conflict) {
+  
+  std::vector<Message *> phase1Replies;
+  TransportAddress *remoteCopy = remote->clone();
+
+  std::vector<::google::protobuf::Message *> ccs;
+  std::vector<proto::SignedMessage *> sccs;
+
+  for (int i = 0; i < reqIds.size(); i++){
+    Debug("reqIds : %d\n", reqIds[i]);
+    Debug("Normal sending P1 result:[%d] for txn: %s", results[i], BytesToHex(txnDigests[i], 16).c_str());
+    //BufferP1Result(result, conflict, txnDigest);
+    proto::Phase1Reply* phase1Reply = GetUnusedPhase1Reply();
+    phase1Reply->set_req_id(reqIds[i]);
+    Debug("phase1Reply->req_id : %d\n", phase1Reply->req_id());
+    //NOTE WARNING PURELY testing
+    //if(result == proto::ConcurrencyControl::ABSTAIN) *phase1Reply->mutable_abstain_conflict() = dummyTx;
+    if(abstain_conflict != nullptr){
+      //Panic("setting abstain_conflict");
+      *phase1Reply->mutable_abstain_conflict() = *abstain_conflict;
+    }
+    phase1Reply->mutable_cc()->set_ccr(results[i]);
+
+    if (params.validateProofs) {
+      *phase1Reply->mutable_cc()->mutable_txn_digest() = txnDigests[i];
+      phase1Reply->mutable_cc()->set_involved_group(groupIdx);
+      if (results[i] == proto::ConcurrencyControl::ABORT) {
+        Debug("results[i] == proto::ConcurrencyControl::ABORT ");
+        *phase1Reply->mutable_cc()->mutable_committed_conflict() = *(conflicts[i]);
+      } else if (params.signedMessages /*&& !params.signatureBatch*/) {
+        proto::ConcurrencyControl* cc = new proto::ConcurrencyControl(phase1Reply->cc());
+        Debug("PHASE1[%s] Batching Phase1Reply.", BytesToHex(txnDigests[i], 16).c_str());
+        SignMessage(cc, keyManager->GetPrivateKey(id), id, phase1Reply->mutable_signed_cc());
+        Debug("PHASE1[%s] Sending Phase1Reply with signature %s from priv key %lu.",
+              BytesToHex(txnDigests[i], 16).c_str(),
+              BytesToHex(phase1Reply->signed_cc().signature(), 100).c_str(),
+              phase1Reply->signed_cc().process_id());
+        delete cc;
+      }
+    }
+    /*
+    for phase1 signature batch
+    if (params.signatureBatch){
+      proto::ConcurrencyControl* cc = 
+         new proto::ConcurrencyControl(phase1Reply->cc());
+      proto::SignedMessage* scc = phase1Reply->mutable_signed_cc();
+      ccs.push_back(cc);
+      sccs.push_back(scc);
+    }
+    */
+    phase1Replies.push_back(phase1Reply);
+  }
+
+  for (int i = 0; i < reqIds.size(); i++){
+    Debug("reqIds : %d\n", reqIds[i]);
+  }
+  
+  /*
+  for phase1 signature batch
+  if (params.signatureBatch){
+    //Latency_Start(&signLat);
+    SignBatchedMessage(ccs, keyManager->GetPrivateKey(id), id, sccs);
+    for(int i = 0; i < phase1Replies.size(); i++){
+      delete ccs[i];
+    }
+  }
+  */
+  /*
+  std::string data;
+  for(int i=0; i < reqIds.size(); i++){
+    (*phase1Replies[i]).SerializeToString(&data);
+    Debug("phase1Replies[i].req_id() : %s", data.c_str());
+  }
+  */
+
+  this->transport->SendMessage_batch(this, *remoteCopy, phase1Replies);
+}
+
 void Server::CleanDependencies(const std::string &txnDigest) {
    //if(params.mainThreadDispatching) dependentsMutex.lock();
    Debug("Called CleanDependencies for txn %s", BytesToHex(txnDigest, 16).c_str());
@@ -3057,6 +4209,7 @@ void Server::CleanDependencies(const std::string &txnDigest) {
   //dependents.erase(txnDigest);
    //if(params.mainThreadDispatching) dependentsMutex.unlock();
    if(params.mainThreadDispatching) waitingDependenciesMutex.unlock();
+  Debug("clean dependency end");
 }
 
 void Server::LookupP1Decision(const std::string &txnDigest, int64_t &myProcessId,
@@ -3299,8 +4452,28 @@ void Server::FreeReadReply(proto::ReadReply *reply) {
   // readReplies.push_back(reply);
 }
 
+void Server::FreeReadReply_batch(std::vector<Message *> &replies) {
+  for (auto itr = replies.begin(); itr != replies.end(); itr++){
+    delete *itr;
+  }
+  
+  // std::unique_lock<std::mutex> lock(readReplyProtoMutex);
+  // //reply->Clear();
+  // readReplies.push_back(reply);
+}
+
 void Server::FreePhase1Reply(proto::Phase1Reply *reply) {
   delete reply;
+  // std::unique_lock<std::mutex> lock(p1ReplyProtoMutex);
+  //
+  // reply->Clear();
+  // p1Replies.push_back(reply);
+}
+
+void Server::FreePhase1Reply_batch(std::vector<Message *> &replies) {
+  for (auto itr = replies.begin(); itr != replies.end(); itr++){
+    delete *itr;
+  }
   // std::unique_lock<std::mutex> lock(p1ReplyProtoMutex);
   //
   // reply->Clear();
@@ -4004,14 +5177,29 @@ void Server::SendPhase1FBReply(P1FBorganizer *p1fb_organizer, const std::string 
       Debug("All message components of Phase1FBreply signed. Sending.");
       p1fb_organizer->sendCBmutex.unlock();
       if(!multi){
-          transport->SendMessage(this, *p1fb_organizer->remote, *p1fb_organizer->p1fbr);
+          if (!params.batchOptimization){
+            transport->SendMessage(this, *p1fb_organizer->remote, *p1fb_organizer->p1fbr);
+          }
+          else{
+            std::vector<Message *> phase1Replies;
+            phase1Replies.push_back(p1fb_organizer->p1fbr);
+            transport->SendMessage_batch(this, *p1fb_organizer->remote, phase1Replies);
+          }
+          
       }
       else{
         interestedClientsMap::const_accessor i;
         bool has_interested = interestedClients.find(i, p1fb_organizer->p1fbr->txn_digest());
         if(has_interested){
           for (const auto addr : i->second) {
-            transport->SendMessage(this, *addr, *p1fb_organizer->p1fbr);
+            if (!params.batchOptimization){
+              transport->SendMessage(this, *p1fb_organizer->remote, *p1fb_organizer->p1fbr);
+            }
+            else{
+              std::vector<Message *> phase1Replies;
+              phase1Replies.push_back(p1fb_organizer->p1fbr);
+              transport->SendMessage_batch(this, *p1fb_organizer->remote, phase1Replies);
+            }
           }
         }
         i.release();

@@ -44,6 +44,7 @@
 #include "store/indicusstore/indicus-proto.pb.h"
 #include "store/indicusstore/batchsigner.h"
 #include "store/indicusstore/verifier.h"
+#include "store/indicusstore/maxsize.h"
 #include <sys/time.h>
 
 #include <set>
@@ -95,6 +96,11 @@ class Server : public TransportReceiver, public ::Server, public PingServer {
       const std::string &type, const std::string &data,
       void *meta_data) override;
 
+  //追加
+  void ReceiveMessage_batch(const TransportAddress &remote,
+      const std::vector<std::string> &types, const std::vector<std::string> &datas,
+      void *meta_data);
+
   virtual void Load(const std::string &key, const std::string &value,
       const Timestamp timestamp) override;
 
@@ -112,11 +118,20 @@ class Server : public TransportReceiver, public ::Server, public PingServer {
     std::string val;
     const proto::CommittedProof *proof;
   };
+  
+
   void ReceiveMessageInternal(const TransportAddress &remote,
       const std::string &type, const std::string &data,
       void *meta_data);
 
+  void ReceiveMessageInternal_batch(const TransportAddress &remote,
+      const std::vector<std::string> &types, const std::vector<std::string> &datas,
+      void *meta_data);
+
   void HandleRead(const TransportAddress &remote, proto::Read &msg);
+
+  void HandleRead_batch(const TransportAddress &remote, proto::Read *read_msgs, int batch_size);
+
   void HandlePhase1_atomic(const TransportAddress &remote,
       proto::Phase1 &msg);
   void ProcessPhase1_atomic(const TransportAddress &remote,
@@ -127,9 +142,21 @@ class Server : public TransportReceiver, public ::Server, public PingServer {
 
   void HandlePhase1(const TransportAddress &remote,
       proto::Phase1 &msg);
+
+  void HandlePhase1_batch(const TransportAddress &remote,
+      proto::Phase1 *msg, int batch_size);
+
   void HandlePhase1CB(proto::Phase1 *msg, proto::ConcurrencyControl::Result result,
         const proto::CommittedProof* &committedProof, std::string &txnDigest, const TransportAddress &remote,
         const proto::Transaction *abstain_conflict, bool replicaGossip = false);
+
+  void HandlePhase1CB_batch(proto::Phase1 *msgs, std::vector<proto::ConcurrencyControl::Result> &results,
+        std::vector<const proto::CommittedProof*> &committedProofs, std::vector<std::string> &txnDigests, 
+        const TransportAddress &remote, const proto::Transaction *abstain_conflict, bool replicaGossip = false);
+
+  void HandlePhase1CB_batch_multi(std::vector<proto::Phase1> &msgs, std::vector<proto::ConcurrencyControl::Result> &results,
+        std::vector<const proto::CommittedProof*> &committedProofs, std::vector<std::string> &txnDigests, 
+        const TransportAddress &remote, const proto::Transaction *abstain_conflict, bool replicaGossip = false);
 
   void HandlePhase2CB(TransportAddress *remote, proto::Phase2 *msg, const std::string* txnDigest,
         signedCallback sendCB, proto::Phase2Reply* phase2Reply, cleanCallback cleanCB, void* valid); //bool valid);
@@ -142,6 +169,8 @@ class Server : public TransportReceiver, public ::Server, public PingServer {
     proto::Transaction* txn, void* valid); //bool valid);
   void HandleWriteback(const TransportAddress &remote,
       proto::Writeback &msg);
+  void HandleWriteback_batch(const TransportAddress &remote,
+     proto::Writeback *msgs, int batch_size);
   void HandleAbort(const TransportAddress &remote, const proto::Abort &msg);
 
   //Fallback handler functions
@@ -335,6 +364,12 @@ class Server : public TransportReceiver, public ::Server, public PingServer {
     const proto::CommittedProof *conflict, const std::string &txnDigest,
     const TransportAddress *remote,
     const proto::Transaction *abstain_conflict = nullptr);
+
+  void SendPhase1Reply_batch(std::vector<uint64_t> &reqIds,
+    std::vector<proto::ConcurrencyControl::Result> &results,
+    std::vector<const proto::CommittedProof *> &conflicts, const std::vector<std::string> &txnDigests,
+    const TransportAddress *remote, const proto::Transaction *abstain_conflict);
+
   void Clean(const std::string &txnDigest);
   void CleanDependencies(const std::string &txnDigest);
   void LookupP1Decision(const std::string &txnDigest, int64_t &myProcessId,
@@ -353,7 +388,9 @@ class Server : public TransportReceiver, public ::Server, public PingServer {
   proto::Phase2 *GetUnusedPhase2message();
   proto::Writeback *GetUnusedWBmessage();
   void FreeReadReply(proto::ReadReply *reply);
+  void FreeReadReply_batch(std::vector<Message *> &replies);
   void FreePhase1Reply(proto::Phase1Reply *reply);
+  void FreePhase1Reply_batch(std::vector<Message *> &replies);
   void FreePhase2Reply(proto::Phase2Reply *reply);
   void FreeReadmessage(proto::Read *msg);
   void FreePhase1message(proto::Phase1 *msg);
@@ -454,9 +491,13 @@ class Server : public TransportReceiver, public ::Server, public PingServer {
   /* Declare protobuf objects as members to avoid stack alloc/dealloc costs */
   proto::SignedMessage signedMessage;
   proto::Read read;
+  //追加
+  proto::Read reads [MAX_MESSAGE_SIZE];
   proto::Phase1 phase1;
+  proto::Phase1 phase1s [MAX_TRANSACTION_SIZE];
   proto::Phase2 phase2;
   proto::Writeback writeback;
+  proto::Writeback writebacks [MAX_TRANSACTION_SIZE];
   proto::Abort abort;
 
   proto::Write preparedWrite;

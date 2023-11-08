@@ -34,6 +34,8 @@
 #include "lib/latency.h"
 #include "store/indicusstore/verifier.h"
 #include "lib/tcptransport.h"
+#include "store/common/random.h"
+#include "store/common/zipf.h"
 
 #include <map>
 #include <string>
@@ -126,6 +128,10 @@ void* BoolPointerWrapper(std::function<bool()> func);
 void SignMessage(::google::protobuf::Message* msg,
     crypto::PrivKey* privateKey, uint64_t processId,
     proto::SignedMessage *signedMessage);
+
+void SignBatchedMessage(const std::vector<::google::protobuf::Message*>& msgs,
+    crypto::PrivKey* privateKey, uint64_t processId,
+    const std::vector<proto::SignedMessage*>& signedMessages);
 
 void* asyncSignMessage(::google::protobuf::Message* msg,
     crypto::PrivKey* privateKey, uint64_t processId,
@@ -388,6 +394,13 @@ typedef struct Parameters {
   const bool no_fallback;
   const uint64_t relayP1_timeout;
   const bool replicaGossip;
+  const bool batchOptimization;
+  const uint64_t batchSize;
+  const uint64_t numOps;
+  const uint64_t numKeys;
+  const double zipfCoefficient;
+  const bool signatureBatch;
+  
 
   Parameters(bool signedMessages, bool validateProofs, bool hashDigest, bool verifyDeps,
     int signatureBatchSize, int64_t maxDepDepth, uint64_t readDepSize,
@@ -401,7 +414,10 @@ typedef struct Parameters {
     bool all_to_all_fb,
     bool no_fallback,
     uint64_t relayP1_timeout,
-    bool replicaGossip) :
+    bool replicaGossip, 
+    bool batchOptimization, uint64_t batchSize, 
+    uint64_t numOps, uint64_t numKeys, double zipfCoefficient, 
+    bool signatureBatch) :
     signedMessages(signedMessages), validateProofs(validateProofs),
     hashDigest(hashDigest), verifyDeps(verifyDeps), signatureBatchSize(signatureBatchSize),
     maxDepDepth(maxDepDepth), readDepSize(readDepSize),
@@ -418,7 +434,10 @@ typedef struct Parameters {
     all_to_all_fb(all_to_all_fb),
     no_fallback(no_fallback),
     relayP1_timeout(relayP1_timeout),
-    replicaGossip(replicaGossip) { }
+    replicaGossip(replicaGossip),
+    batchOptimization(batchOptimization), batchSize(batchSize), 
+    numOps(numOps), numKeys(numKeys), zipfCoefficient(zipfCoefficient), 
+    signatureBatch(signatureBatch){ }
 } Parameters;
 
 } // namespace indicusstore

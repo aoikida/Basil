@@ -79,8 +79,8 @@ LocalBatchVerifier::~LocalBatchVerifier() {
     Latency_Sum(&sum_crypto, &cryptoLats[i]);
   }
 
-  Latency_Dump(&sum_hash);
-  Latency_Dump(&sum_crypto);
+  //Latency_Dump(&sum_hash);
+  //Latency_Dump(&sum_crypto);
 }
 
 bool LocalBatchVerifier::Verify2(crypto::PubKey *publicKey, const std::string *message,

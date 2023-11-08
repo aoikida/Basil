@@ -126,6 +126,162 @@ void ShardClient::ReceiveMessage(const TransportAddress &remote,
   }
 }
 
+void ShardClient::ReceiveMessage_batch(const TransportAddress &remote,
+      const std::vector<std::string> &types, const std::vector<std::string> &datas, void *meta_data) {
+      
+  Debug("ShardClient::ReceiveMessage_batch");
+  int batchSize = datas.size();
+
+  const std::string data = datas[0];
+
+  std::vector<int> batchSizeArray;
+  std::vector<std::string> typeArray;
+
+  int type_change_point = 0;
+
+  if (batchSize == 1){
+    batchSizeArray.push_back(batchSize);
+    typeArray.push_back(types[0]);
+  }
+  else {
+    for(int i = 1; i < batchSize; i++){
+      if (types[i] != types[i - 1]){
+        typeArray.push_back(types[i - 1]);
+        batchSizeArray.push_back(i - type_change_point);
+        type_change_point = i;
+      }
+    }
+    typeArray.push_back(types[batchSize - 1]);
+    batchSizeArray.push_back(batchSize - type_change_point);
+    if (batchSizeArray.size() == 0){
+      batchSizeArray.push_back(batchSize);
+      typeArray.push_back(types[0]);
+    }
+  }
+
+  Debug("batchSize: %d\n",batchSize);
+
+  Debug("batchSizeArray.size(): %d\n", batchSizeArray.size());
+
+  for (int i = 0; i < batchSizeArray.size(); i++){
+    Debug("batchSize : %d\n",batchSizeArray[i]);
+  }
+
+  Debug("typeArray.size(): %d\n",typeArray.size());
+  for (int i = 0; i < typeArray.size(); i++){
+    Debug("type : %s\n",typeArray[i].c_str());
+  }
+
+  for(int i = 0; i < batchSizeArray.size(); i++){
+    Debug("type : %s\n",typeArray[i].c_str());
+    if (typeArray[i] == readReply.GetTypeName()) {
+      if(params.multiThreading){
+        for (int j = 0; j < batchSizeArray[i]; j++){
+          proto::ReadReply *curr_read = GetUnusedReadReply();
+          curr_read->ParseFromString(datas[j]);
+          HandleReadReplyMulti(curr_read);
+        }
+        
+      }
+      else{
+        std::vector<proto::ReadReply> read_replies;
+        for (int j = 0; j < batchSizeArray[i]; j++){
+          proto::ReadReply *read_reply = GetUnusedReadReply();
+          read_reply->ParseFromString(datas[j]);
+          read_replies.push_back(*read_reply);
+          Debug("[group %i] ReadReply for %lu with %lu.", group, read_replies[j].req_id(), read_replies[j].key());
+        }
+        const_cast<std::vector<std::string> *>(&datas)->erase(std::cbegin(datas), std::cbegin(datas) + batchSizeArray[i]);
+        if (params.signatureBatch){
+          HandleReadReply_sig_batch(read_replies);
+        }
+        else {
+          HandleReadReply_batch(read_replies);
+        }
+      }
+    } 
+    else if (typeArray[i] == phase1Reply.GetTypeName()) {
+      //if (!params.signatureBatch){
+      for (int j = 0; j < batchSizeArray[i]; j++){
+        phase1Reply.ParseFromString(datas[j]);
+        HandlePhase1Reply(phase1Reply);
+      }
+      const_cast<std::vector<std::string> *>(&datas)->erase(std::cbegin(datas), std::cbegin(datas) + batchSizeArray[i]);
+      //}
+      /*
+      else {
+        // for phase1 signature batch 
+        std::vector<proto::Phase1Reply> phase1_replies;
+        for (int j = 0; j < batchSizeArray[i]; j++){
+          proto::Phase1Reply *phase1_reply = GetUnusedPhase1Reply();
+          phase1_reply->ParseFromString(datas[j]);
+          phase1_replies.push_back(*phase1_reply);
+          Debug("[group %i] ReadReply for %lu.", group, phase1_replies[j].req_id());
+        }
+        const_cast<std::vector<std::string> *>(&datas)->erase(std::cbegin(datas), std::cbegin(datas) + batchSizeArray[i]);
+        
+        ProcessP1R_batch(phase1_replies);
+      }
+      */
+      
+      
+      // if (params.injectFailure.enabled && params.injectFailure.type == InjectFailureType::CLIENT_EQUIVOCATE) {
+      //   HandleP1REquivocate(phase1Reply);
+      // } else {
+      //   HandlePhase1Reply(phase1Reply);
+      // }
+    } else if (typeArray[i] == phase2Reply.GetTypeName()) {
+      phase2Reply.ParseFromString(datas[0]);
+      const_cast<std::vector<std::string> *>(&datas)->erase(std::cbegin(datas), std::cbegin(datas) + batchSizeArray[i]);
+      //Use old handle Read only when proofs/signatures disabled
+      if(!(params.validateProofs && params.signedMessages)){
+        HandlePhase2Reply(phase2Reply);
+      }
+      else{ //If validateProofs and signMessages are true, then use multi view
+        HandlePhase2Reply_MultiView(phase2Reply);
+      }
+      //HandlePhase2Reply_MultiView(phase2Reply);
+      //HandlePhase2Reply(phase2Reply);
+    } else if (typeArray[i] == ping.GetTypeName()) {
+      ping.ParseFromString(datas[0]);
+      const_cast<std::vector<std::string> *>(&datas)->erase(std::cbegin(datas), std::cbegin(datas) + batchSizeArray[i]);
+      HandlePingResponse(ping);
+
+      //FALLBACK readMessages
+    } else if(typeArray[i] == relayP1.GetTypeName()){ //receive full TX info for a dependency
+      relayP1.ParseFromString(datas[0]);
+      const_cast<std::vector<std::string> *>(&datas)->erase(std::cbegin(datas), std::cbegin(datas) + batchSizeArray[i]);
+      HandlePhase1Relay(relayP1); //Call into client to see if still waiting.
+    }
+    else if(typeArray[i] == phase1FBReply.GetTypeName()){
+      //wait for quorum and relay to client
+      phase1FBReply.ParseFromString(datas[0]);
+      const_cast<std::vector<std::string> *>(&datas)->erase(std::cbegin(datas), std::cbegin(datas) + batchSizeArray[i]);
+      HandlePhase1FBReply(phase1FBReply); // update pendingFB state -- if complete, upcall to client
+    }
+    else if(typeArray[i] == phase2FBReply.GetTypeName()){
+      //wait for quorum and relay to client
+      phase2FBReply.ParseFromString(datas[0]);
+      const_cast<std::vector<std::string> *>(&datas)->erase(std::cbegin(datas), std::cbegin(datas) + batchSizeArray[i]);
+      HandlePhase2FBReply(phase2FBReply); //update pendingFB state -- if complete, upcall to client
+    }
+    else if(typeArray[i] == forwardWB.GetTypeName()){
+      forwardWB.ParseFromString(datas[0]);
+      const_cast<std::vector<std::string> *>(&datas)->erase(std::cbegin(datas), std::cbegin(datas) + batchSizeArray[i]);
+      HandleForwardWB(forwardWB);
+    }
+    else if(typeArray[i] == sendView.GetTypeName()){
+      sendView.ParseFromString(datas[0]);
+      const_cast<std::vector<std::string> *>(&datas)->erase(std::cbegin(datas), std::cbegin(datas) + batchSizeArray[i]);
+      HandleSendViewMessage(sendView);
+    }
+    else {
+      Panic("Received unexpected message type: %s", typeArray[i].c_str());
+    }
+  }
+}
+
+
 void ShardClient::Begin(uint64_t id) {
   Debug("[group %i] BEGIN: %lu", group, id);
 
@@ -133,10 +289,20 @@ void ShardClient::Begin(uint64_t id) {
   readValues.clear();
 }
 
+void ShardClient::Begin_batch(uint64_t id, int batch_num) {
+  Debug("[group %i] BEGIN: %lu", group, id);
+
+  if (batch_num == 0){
+    txn.Clear();
+    readValues.clear();
+  }
+}
+
 void ShardClient::Get(uint64_t id, const std::string &key,
     const TimestampMessage &ts, uint64_t readMessages, uint64_t rqs,
-    uint64_t rds, read_callback gcb, read_timeout_callback gtcb,
+    uint64_t rds, read_callback gcb, read_timeout_callback gtc,
     uint32_t timeout) {
+
   if (BufferGet(key, gcb)) {
     Debug("[group %i] read from buffer.", group);
     return;
@@ -149,7 +315,7 @@ void ShardClient::Get(uint64_t id, const std::string &key,
   pendingGet->rqs = rqs;
   pendingGet->rds = rds;
   pendingGet->gcb = gcb;
-  pendingGet->gtcb = gtcb;
+  pendingGet->gtc = gtc;
 
   read.Clear();
   read.set_req_id(reqId);
@@ -165,6 +331,61 @@ void ShardClient::Get(uint64_t id, const std::string &key,
   Debug("[group %i] Sent GET [%lu : %lu]", group, id, reqId);
 }
 
+
+
+void ShardClient::Get_batch(uint64_t id, const std::vector<std::string> &key_list,
+    const std::vector<TimestampMessage> &ts_list, uint64_t readMessages, uint64_t rqs,
+    uint64_t rds, std::vector<read_callback> &rcb_list, read_timeout_callback_batch gtcb,
+    uint32_t timeout) {  //readMessages : 何個のレプリカにメッセージを送るのか？
+
+  // ここは通っていなそうなので、今のところ無視して良さそう
+  /*
+  if (BufferGet(key, gcb)) {
+    Debug("[group %i] read from buffer.", group);
+    return;
+  }
+  */
+
+  read_batch.clear();
+  int numRead = key_list.size();
+
+  //pendingGetにデータアイテムを追加しているが、pendingGetはどこで使用されるのか？？
+  //とりあえずこの部分は、ループで回したらバッチに対応できそう。
+  for(int i = 0; i < numRead; i++){
+    uint64_t reqId = lastReqId++;
+    Debug("reqId : %d", reqId);
+    PendingQuorumGet *pendingGet = new PendingQuorumGet(reqId);
+    pendingGets[reqId] = pendingGet;
+    pendingGet->key = key_list[i];
+
+    //これらの要素は配列にしなくてもいいかどうか
+    pendingGet->rqs = rqs;  //rqs(readQuorumMessage) : 何個のレプリカからのメッセージを受け取るのか？
+    pendingGet->rds = rds;  //rds(readDependentSize) : 何個のメッセージを受け取るのか・
+    pendingGet->gcb = rcb_list[i];
+    pendingGet->gtcb = gtcb;    
+
+    reads[i].Clear(); //初期化
+    reads[i].set_req_id(reqId); //バッチ内で固定 or 変
+    reads[i].set_key(key_list[i]); 
+    *reads[i].mutable_timestamp() = ts_list[i]; //注意
+    read_batch.push_back(&reads[i]);
+  }
+
+  UW_ASSERT(readMessages <= closestReplicas.size());
+
+  //これでレプリカに対して、readのrequestを送信している。
+  for (size_t i = 0; i < readMessages; ++i) {
+    Debug("[group %i] Sending GET to replica %lu", group, GetNthClosestReplica(i));
+    transport->SendMessageToReplica_batch(this, group, GetNthClosestReplica(i), read_batch);
+  }
+
+  for(int i = 0; i < numRead; i++){
+    Debug("[group %i] Sent GET [%lu : %lu]", group, id, lastReqId - numRead + i);
+  }
+}
+
+
+
 void ShardClient::Put(uint64_t id, const std::string &key,
       const std::string &value, put_callback pcb, put_timeout_callback ptcb,
       uint32_t timeout) {
@@ -174,7 +395,14 @@ void ShardClient::Put(uint64_t id, const std::string &key,
   pcb(REPLY_OK, key, value);
 }
 
-
+void ShardClient::Put_ycsb(uint64_t id, const std::string &key,
+      const std::string &value, put_callback_ycsb pcby, put_timeout_callback ptcb, Xoroshiro128Plus &rnd, FastZipf &zipf,
+      uint32_t timeout) {
+  WriteMessage *writeMsg = txn.add_write_set();
+  writeMsg->set_key(key);
+  writeMsg->set_value(value);
+  pcby(REPLY_OK, key, value, rnd, zipf);
+}
 
 void ShardClient::Phase1(uint64_t id, const proto::Transaction &transaction, const std::string &txnDigest,
   phase1_callback pcb, phase1_timeout_callback ptcb, relayP1_callback rcb, finishConflictCB fcb, uint32_t timeout) {
@@ -233,6 +461,73 @@ void ShardClient::Phase1(uint64_t id, const proto::Transaction &transaction, con
     // start_time = (tv.tv_sec*1000000+tv.tv_usec);  //in microseconds
 }
 
+void ShardClient::Phase1_batch(uint64_t id, proto::Transaction * transactions, const std::vector<std::string> &txnDigests,
+  std::vector<phase1_callback> &pcb, std::vector<phase1_timeout_callback> &ptcb, std::vector<relayP1_callback> &rcb, std::vector<finishConflictCB> &fcb, uint32_t timeout) {
+
+  int phase1Num = pcb.size();
+  phase1_batch.clear();
+  for(uint64_t i = 0; i < phase1Num; i++){
+    Debug("[group %i] Sending PHASE1_batch [%lu]", group, id+i);
+  
+    uint64_t reqId = lastReqId++;
+    client_seq_num_mapping[id+i].pendingP1_id = reqId;
+    PendingPhase1 *pendingPhase1 = new PendingPhase1(reqId, group, transactions[i],
+        txnDigests[i], config, keyManager, params, verifier, id+i);
+    pendingPhase1s[reqId] = pendingPhase1;
+    pendingPhase1->pcb = std::move(pcb[i]);
+    pendingPhase1->ptcb = std::move(ptcb[i]);
+    pendingPhase1->rcb = std::move(rcb[i]);
+    pendingPhase1->ConflictCB = std::move(fcb[i]); //TODO: change all to std::move()
+    pendingPhase1->requestTimeout = new Timeout(transport, timeout, [this, pendingPhase1]() {
+      phase1_timeout_callback ptcb = pendingPhase1->ptcb;
+      auto itr = this->pendingPhase1s.find(pendingPhase1->reqId);
+      //uint64_t reqId = pendingPhase1->reqId;
+      if (itr != this->pendingPhase1s.end()) {
+        PendingPhase1 *pendingPhase1 = itr->second;
+        this->pendingPhase1s.erase(itr);
+        delete pendingPhase1;
+      }
+      ptcb(REPLY_TIMEOUT);
+    });
+
+    phase1s[i].Clear();
+    phase1s[i].set_req_id(reqId);
+    *phase1s[i].mutable_txn() = transactions[i];
+    phase1s[i].set_replica_gossip(false);
+    phase1_batch.push_back(&phase1s[i]);
+  }
+
+   Debug("phase1 reply.req_id :%d", phase1s[0].req_id());
+
+  if(failureActive && params.injectFailure.type == InjectFailureType::CLIENT_SEND_PARTIAL_P1){
+    for(int i = 0; i < phase1Num; i++){
+      phase1s[i].set_crash_failure(true);
+    }
+    for (size_t i = 0; i < config->n; ++i) {
+      size_t rindex = GetNthClosestReplica(i);
+      //if(rindex <= 2){
+      if (rindex % 2 == 1) {
+        Debug("[group %i] Sending P1 to odd-numbered replica %lu", group, rindex);
+        transport->SendMessageToReplica_batch(this, group, rindex, phase1_batch);
+      }
+    }
+  }
+  else if(failureActive && params.injectFailure.type == InjectFailureType::CLIENT_CRASH) {
+    transport->SendMessageToGroup_batch(this, group, phase1_batch);
+  }
+  else{
+    transport->SendMessageToGroup_batch(this, group, phase1_batch);
+  }
+  //transport->SendMessageToGroup(this, group, phase1);
+  for(int i = 0; i < phase1Num; i++){
+    pendingPhase1s[lastReqId - phase1Num + i]->requestTimeout->Reset();
+  }
+
+    // struct timeval tv;
+    // gettimeofday(&tv, NULL);
+    // start_time = (tv.tv_sec*1000000+tv.tv_usec);  //in microseconds
+}
+
 void ShardClient::Phase2(uint64_t id,
     const proto::Transaction &txn, const std::string &txnDigest,
     proto::CommitDecision decision,
@@ -281,6 +576,60 @@ void ShardClient::Phase2(uint64_t id,
 
   pendingPhase2->requestTimeout->Reset();
 }
+
+void ShardClient::Phase2_batch(uint64_t id,
+    const proto::Transaction &txn, const std::string &txnDigest,
+    proto::CommitDecision decision,
+    const proto::GroupedSignatures &groupedSigs, phase2_callback pcb,
+    phase2_timeout_callback ptcb, uint32_t timeout) {
+  Debug("[group %i] Sending PHASE2 [%lu]", group, id);
+  uint64_t reqId = lastReqId++;
+  client_seq_num_mapping[id].pendingP2_id = reqId;
+
+  // uint64_t special_id = reqId << 8 + client_id;
+  // std::cerr << "special ID: " << special_id << std::endl;
+  // std::cerr << "Trying to " << (decision? "ABORT" : "COMMIT") << "txn on slowpath" << std::endl;
+  // reqId = special_id;
+  // test_mapping[reqId] = id;
+  // std::cerr <<"Sending Phase2 for txnId: " << id << " to group: " << group << std::endl;
+  // std::cerr << "TxnId " << id << " maps to reqId: " << reqId << " sent by client" << client_id <<  std::endl;;
+
+  phase2_batch.clear();
+
+  PendingPhase2 *pendingPhase2 = new PendingPhase2(reqId, decision);  //TODO: add view that this decision is from (default = 0).
+  //TODO: When sending an InvokeFB message, this view = the view you propose ; but unclear what decision you are waiting for?
+  //Create many mappings for potential views/decisions instead.
+  //XXX currently not necessary as code is written under the assumption that Invoke only happens for equivocation, and client issuing equivocation moves on to next tx.
+  pendingPhase2s[reqId] = pendingPhase2;
+  pendingPhase2->pcb = std::move(pcb);
+  pendingPhase2->ptcb = std::move(ptcb);
+  pendingPhase2->requestTimeout = new Timeout(transport, timeout, [this, pendingPhase2]() {
+      phase2_timeout_callback ptcb = pendingPhase2->ptcb;
+      auto itr = this->pendingPhase2s.find(pendingPhase2->reqId);
+      if (itr != this->pendingPhase2s.end()) {
+        PendingPhase2 *pendingPhase2 = itr->second;
+        this->pendingPhase2s.erase(itr);
+        delete pendingPhase2;
+      }
+
+      ptcb(REPLY_TIMEOUT);
+  });
+
+  phase2s[0].Clear();
+  phase2s[0].set_req_id(reqId);
+  phase2s[0].set_decision(decision);
+  *phase2s[0].mutable_txn_digest() = txnDigest;
+  phase2_batch.push_back(&phase2s[0]);
+
+  if (params.validateProofs && params.signedMessages) {
+    *phase2s[0].mutable_grouped_sigs() = groupedSigs;
+  }
+
+  transport->SendMessageToGroup_batch(this, group, phase2_batch);
+
+  pendingPhase2->requestTimeout->Reset();
+}
+
 
 void ShardClient::Phase2Equivocate_Simulate(uint64_t id,
     const proto::Transaction &txn, const std::string &txnDigest,
@@ -481,7 +830,7 @@ void ShardClient::Phase2Equivocate(uint64_t id,
 void ShardClient::Writeback(uint64_t id, const proto::Transaction &transaction, const std::string &txnDigest,
   proto::CommitDecision decision, bool fast, bool conflict_flag, const proto::CommittedProof &conflict,
   const proto::GroupedSignatures &p1Sigs, const proto::GroupedSignatures &p2Sigs, uint64_t decision_view) {
-
+  
   writeback.Clear();
   // create commit request
   writeback.set_decision(decision);
@@ -514,6 +863,71 @@ void ShardClient::Writeback(uint64_t id, const proto::Transaction &transaction, 
   // }
 
   transport->SendMessageToGroup(this, group, writeback);
+  if(id > 0) {
+    Debug("[group %i] Sent WRITEBACK[%lu]", group, id);
+    auto itr = client_seq_num_mapping.find(id);
+    if(itr != client_seq_num_mapping.end()){
+        // PendingReqIds &pRids = itr->second;
+        // auto itrP1 = pendingPhase1s.find(pRids.pendingP1_id);
+        // if(itrP1 != pendingPhase1s.end()){
+        //   delete itrP1->second;
+        //   pendingPhase1s.erase(itrP1);
+        // }
+        // auto itrP2 = pendingPhase2s.find(pRids.pendingP2_id);
+        // if(itrP2 != pendingPhase2s.end()){
+        //   pendingPhase2s.erase(itrP2);
+        //   delete itrP2->second;
+        // }
+        // pendingPhase1s.erase(pRids.pendingP1_id);
+        // pendingPhase2s.erase(pRids.pendingP2_id);
+        client_seq_num_mapping.erase(itr);
+     }
+  }
+  else{
+    Debug("[group %i] Sent Fallback WRITEBACK[%s]", group, BytesToHex(txnDigest, 16).c_str());
+    //pendingFallbacks.erase(txnDigest);
+  }
+}
+
+//TODO: make more efficient by swapping sigs instead of copying.
+void ShardClient::Writeback_batch(uint64_t id, const proto::Transaction &transaction, const std::string &txnDigest,
+  proto::CommitDecision decision, bool fast, bool conflict_flag, const proto::CommittedProof &conflict,
+  const proto::GroupedSignatures &p1Sigs, const proto::GroupedSignatures &p2Sigs, uint64_t decision_view) {
+  writeback.Clear();
+  writeback_batch.clear();
+  // create commit request
+  writeback.set_decision(decision);
+  if (params.validateProofs && params.signedMessages) {
+    if (fast && decision == proto::COMMIT) {
+      *writeback.mutable_p1_sigs() = p1Sigs;
+    }
+    else if (fast && !conflict_flag && decision == proto::ABORT) {
+      *writeback.mutable_p1_sigs() = p1Sigs;
+    }
+    else if (fast && conflict_flag && decision == proto::ABORT) {
+      *writeback.mutable_conflict() = conflict;
+      if(conflict.has_p2_view()){
+        writeback.set_p2_view(conflict.p2_view()); //XXX not really necessary, we never check it
+      }
+      else{
+        writeback.set_p2_view(0); //implies that this was a p1 proof for the conflict, attaching a view anyway..
+      }
+
+    } else {
+      *writeback.mutable_p2_sigs() = p2Sigs;
+      writeback.set_p2_view(decision_view); //TODO: extend this to process other views too? Bookkeeping should only be needed
+      // for fallback though. Either combine the logic, or change it so that the orignial client issues FB function too
+
+    }
+  }
+  writeback.set_txn_digest(txnDigest);
+  // if(id == 0) { //in FB a replica may not have seen the txn... not necessary since all failed clients wouldve sent to everyone first...
+  //   *writeback.mutable_txn() = transaction;
+  // }
+
+  writeback_batch.push_back(&writeback);
+  transport->SendMessageToGroup_batch(this, group, writeback_batch);
+  
   if(id > 0) {
     Debug("[group %i] Sent WRITEBACK[%lu]", group, id);
     auto itr = client_seq_num_mapping.find(id);
@@ -628,13 +1042,27 @@ void ShardClient::GetTimeout(uint64_t reqId) {
   auto itr = this->pendingGets.find(reqId);
   if (itr != this->pendingGets.end()) {
     PendingQuorumGet *pendingGet = itr->second;
-    get_timeout_callback gtcb = pendingGet->gtcb;
+    get_timeout_callback gtc = pendingGet->gtc;
     std::string key = pendingGet->key;
     this->pendingGets.erase(itr);
     delete pendingGet;
-    gtcb(REPLY_TIMEOUT, key);
+    gtc(REPLY_TIMEOUT, key);
   }
 }
+
+/*
+void ShardClient::GetTimeout_batch(uint64_t reqId) {
+  auto itr = this->pendingGets.find(reqId);
+  if (itr != this->pendingGets.end()) {
+    PendingQuorumGet *pendingGet = itr->second;
+    get_timeout_callback_batch gtcb = pendingGet->gtcb;
+    std::string key = pendingGet->key;
+    this->pendingGets.erase(itr);
+    delete pendingGet;
+    gtcb(REPLY_TIMEOUT, key, );
+  }
+}
+*/
 
 
 
@@ -985,6 +1413,315 @@ void ShardClient::HandleReadReply(const proto::ReadReply &reply) {
   }
 }
 
+void ShardClient::HandleReadReply_batch(const std::vector<proto::ReadReply> &replies) {
+
+  Debug("replies.size(): %d", replies.size());
+  
+  for (int i = 0; i < replies.size(); i++){
+
+    auto itr = this->pendingGets.find(replies[i].req_id());
+    Debug("reply.req_id :%d", replies[i].req_id());
+    if (itr == this->pendingGets.end()) {
+      Debug("itr == this->pendingGets.end()");
+      break; // this is a stale request
+    }
+    PendingQuorumGet *req = itr->second;
+    Debug("[group %i] ReadReply for %lu.", group, replies[i].req_id());
+
+    const proto::Write *write;
+    bool skip = false;
+
+    if (params.validateProofs && params.signedMessages) {
+      // consecutive_reads++;
+      // skip = (consecutive_reads % 3 == 0) ? true : false;
+      if (replies[i].has_signed_write()) {
+        if (!skip && !verifier->Verify(keyManager->GetPublicKey(replies[i].signed_write().process_id()),
+                replies[i].signed_write().data(), replies[i].signed_write().signature())) {
+          Debug("[group %i] Failed to validate signature for write.", group);
+          return;
+        }
+
+        if(!validatedPrepared.ParseFromString(replies[i].signed_write().data())) {
+          Debug("[group %i] Invalid serialization of write.", group);
+          return;
+        }
+
+        write = &validatedPrepared;
+      } else {
+        if (replies[i].has_write() && replies[i].write().has_committed_value()) {
+          Debug("[group %i] Reply contains unsigned committed value.", group);
+          return;
+        }
+
+        if (params.verifyDeps && replies[i].has_write() && replies[i].write().has_prepared_value()) {
+          Debug("[group %i] Reply contains unsigned prepared value.", group);
+          return;
+        }
+
+        write = &replies[i].write();
+        UW_ASSERT(!write->has_committed_value());
+        UW_ASSERT(!write->has_prepared_value() || !params.verifyDeps);
+      }
+    } else {
+      write = &replies[i].write();
+    }
+
+  // value and timestamp are valid
+    req->numReplies++;
+    if (write->has_committed_value() && write->has_committed_timestamp()) {
+      if (!skip && params.validateProofs) {
+        if (!replies[i].has_proof()) {
+          Debug("[group %i] Missing proof for committed write.", group);
+          return;
+        }
+
+        std::string committedTxnDigest = TransactionDigest(
+            replies[i].proof().txn(), params.hashDigest);
+        if (!ValidateTransactionWrite(replies[i].proof(), &committedTxnDigest,
+              req->key, write->committed_value(), write->committed_timestamp(),
+              config, params.signedMessages, keyManager, verifier)) {
+          Debug("[group %i] Failed to validate committed value for read %lu.",
+              group, replies[i].req_id());
+          // invalid replies can be treated as if we never received a reply from
+          //     a crashed replica
+          return;
+        }
+      }
+      Timestamp replyTs(write->committed_timestamp());
+      Debug("[group %i] ReadReply for %lu with committed %lu byte value and ts"
+          " %lu.%lu.", group, replies[i].req_id(), write->committed_value().length(),
+          replyTs.getTimestamp(), replyTs.getID());
+      if (req->firstCommittedReply || req->maxTs < replyTs) {
+        req->maxTs = replyTs;
+        req->maxValue = write->committed_value();
+      }
+      req->firstCommittedReply = false;
+    }
+
+  //TODO: change so client does not accept reads with depth > some t... (fine for now since
+  // servers dont fail and use the same param setting)
+    if (params.maxDepDepth > -2 && write->has_prepared_value() &&
+        write->has_prepared_timestamp() &&
+        write->has_prepared_txn_digest()) {
+      Timestamp preparedTs(write->prepared_timestamp());
+      Debug("[group %i] ReadReply for %lu with prepared %lu byte value and ts"
+        " %lu.%lu.", group, replies[i].req_id(), write->prepared_value().length(),
+        preparedTs.getTimestamp(), preparedTs.getID());
+      auto preparedItr = req->prepared.find(preparedTs);
+      if (preparedItr == req->prepared.end()) {
+        req->prepared.insert(std::make_pair(preparedTs,
+              std::make_pair(*write, 1)));
+      } else if (preparedItr->second.first == *write) {
+        preparedItr->second.second += 1;
+      }
+
+      if (params.validateProofs && params.signedMessages && params.verifyDeps) {
+        proto::Signature *sig = req->preparedSigs[preparedTs].add_sigs();
+        sig->set_process_id(replies[i].signed_write().process_id());
+        *sig->mutable_signature() = replies[i].signed_write().signature();
+      }
+    }
+
+    if (req->numReplies >= req->rqs) {
+      Debug("req->numReplies >= req->rqs");
+      if (params.maxDepDepth > -2) {
+        for (auto preparedItr = req->prepared.rbegin();
+          preparedItr != req->prepared.rend(); ++preparedItr) {
+          if (preparedItr->first < req->maxTs) {
+            break;
+          }
+
+          if (preparedItr->second.second >= req->rds) {
+            req->maxTs = preparedItr->first;
+            req->maxValue = preparedItr->second.first.prepared_value();
+            *req->dep.mutable_write() = preparedItr->second.first;
+            if (params.validateProofs && params.signedMessages && params.verifyDeps) {
+              *req->dep.mutable_write_sigs() = req->preparedSigs[preparedItr->first];
+            }
+            req->dep.set_involved_group(group);
+            req->hasDep = true;
+            break;
+          }
+        }
+      }
+      pendingGets.erase(itr);
+      ReadMessage *read = txn.add_read_set();
+      *read->mutable_key() = req->key;
+      req->maxTs.serialize(read->mutable_readtime());
+      readValues[req->key] = req->maxValue;
+      req->gcb(REPLY_OK, req->key, req->maxValue, req->maxTs, req->dep,
+        req->hasDep, true);
+      delete req;
+    }
+    else {
+      Debug("req->numReplies < req->rqs");
+    }
+  }
+}
+
+/* Callback from a group replica on get operation completion. */
+void ShardClient::HandleReadReply_sig_batch(const std::vector<proto::ReadReply> &replies) {
+
+  bool skip1 = false;
+  bool skip2 = false;
+
+  bool first = true;
+  std::string messages;
+  std::string signature;
+  for (int i = 0; i < replies.size(); i++){
+    if (replies[i].has_signed_write()){
+      messages.append(replies[i].signed_write().data());
+      if (first){
+        signature = replies[i].signed_write().signature();
+        first = false;
+      }
+    }
+  }
+  
+  for (int i = 0; i < replies.size(); i++){
+
+    auto itr = this->pendingGets.find(replies[i].req_id());
+    if (itr == this->pendingGets.end()) {
+      return; // this is a stale request
+    }
+    PendingQuorumGet *req = itr->second;
+    Debug("[group %i] ReadReply for %lu.", group, replies[i].req_id());
+
+    const proto::Write *write;
+
+    if (params.validateProofs && params.signedMessages) {
+      if (replies[i].has_signed_write()) {
+        // verifyを一括で行う方法を考える。
+        if (!skip1) {
+          bool verify_result = verifier->Verify(keyManager->GetPublicKey(replies[i].signed_write().process_id()),
+            messages, signature);
+          if (params.signatureBatch && verify_result) {
+            Debug("Verify success\n");
+            skip1 = true;
+          }
+          else if (!verify_result) {
+            Debug("[group %i] Failed to validate signature for write.", group);
+            return;
+          }
+        }
+        if (!validatedPrepared.ParseFromString(replies[i].signed_write().data())) {
+          Debug("[group %i] Invalid serialization of write.", group);
+          return;
+        }
+
+        write = &validatedPrepared;
+      } 
+      else {
+        if (replies[i].has_write() && replies[i].write().has_committed_value()) {
+          Debug("[group %i] Reply contains unsigned committed value.", group);
+          return;
+        }
+
+        if (params.verifyDeps && replies[i].has_write() && replies[i].write().has_prepared_value()) {
+          Debug("[group %i] Reply contains unsigned prepared value.", group);
+          return;
+        }
+
+        write = &replies[i].write();
+        UW_ASSERT(!write->has_committed_value());
+        UW_ASSERT(!write->has_prepared_value() || !params.verifyDeps);
+      }
+    }
+    else {
+      write = &replies[i].write();
+    }
+
+  // value and timestamp are valid
+    req->numReplies++;
+    if (write->has_committed_value() && write->has_committed_timestamp()) {
+      if (!skip2 && params.validateProofs) {
+        if (!replies[i].has_proof()) {
+          Debug("[group %i] Missing proof for committed write.", group);
+          return;
+        }
+
+        std::string committedTxnDigest = TransactionDigest(
+            replies[i].proof().txn(), params.hashDigest);
+
+        if (!ValidateTransactionWrite(replies[i].proof(), &committedTxnDigest,
+              req->key, write->committed_value(), write->committed_timestamp(),
+              config, params.signedMessages, keyManager, verifier)) {
+                
+          Debug("[group %i] Failed to validate committed value for read %lu.",
+              group, replies[i].req_id());
+          // invalid replies can be treated as if we never received a reply from
+          //     a crashed replica
+          return;
+        }
+      }
+      Timestamp replyTs(write->committed_timestamp());
+      Debug("[group %i] ReadReply for %lu with committed %lu byte value and ts"
+          " %lu.%lu.", group, replies[i].req_id(), write->committed_value().length(),
+          replyTs.getTimestamp(), replyTs.getID());
+      if (req->firstCommittedReply || req->maxTs < replyTs) {
+        req->maxTs = replyTs;
+        req->maxValue = write->committed_value();
+      }
+      req->firstCommittedReply = false;
+    }
+
+  //TODO: change so client does not accept reads with depth > some t... (fine for now since
+  // servers dont fail and use the same param setting)
+    if (params.maxDepDepth > -2 && write->has_prepared_value() &&
+        write->has_prepared_timestamp() &&
+        write->has_prepared_txn_digest()) {
+      Timestamp preparedTs(write->prepared_timestamp());
+      Debug("[group %i] ReadReply for %lu with prepared %lu byte value and ts"
+        " %lu.%lu.", group, replies[i].req_id(), write->prepared_value().length(),
+        preparedTs.getTimestamp(), preparedTs.getID());
+      auto preparedItr = req->prepared.find(preparedTs);
+      if (preparedItr == req->prepared.end()) {
+        req->prepared.insert(std::make_pair(preparedTs,
+              std::make_pair(*write, 1)));
+      } else if (preparedItr->second.first == *write) {
+        preparedItr->second.second += 1;
+      }
+
+      if (params.validateProofs && params.signedMessages && params.verifyDeps) {
+        proto::Signature *sig = req->preparedSigs[preparedTs].add_sigs();
+        sig->set_process_id(replies[i].signed_write().process_id());
+        *sig->mutable_signature() = signature;
+      }
+    }
+
+    if (req->numReplies >= req->rqs) {
+      if (params.maxDepDepth > -2) {
+        for (auto preparedItr = req->prepared.rbegin();
+          preparedItr != req->prepared.rend(); ++preparedItr) {
+          if (preparedItr->first < req->maxTs) {
+            break;
+          }
+
+          if (preparedItr->second.second >= req->rds) {
+            req->maxTs = preparedItr->first;
+            req->maxValue = preparedItr->second.first.prepared_value();
+            *req->dep.mutable_write() = preparedItr->second.first;
+            if (params.validateProofs && params.signedMessages && params.verifyDeps) {
+              *req->dep.mutable_write_sigs() = req->preparedSigs[preparedItr->first];
+            }
+            req->dep.set_involved_group(group);
+            req->hasDep = true;
+            break;
+          }
+        }
+      }
+      pendingGets.erase(itr);
+      ReadMessage *read = txn.add_read_set();
+      *read->mutable_key() = req->key;
+      req->maxTs.serialize(read->mutable_readtime());
+      readValues[req->key] = req->maxValue;
+      req->gcb(REPLY_OK, req->key, req->maxValue, req->maxTs, req->dep,
+        req->hasDep, true);
+      delete req;
+    }
+  }
+}
+
 
 void ShardClient::HandlePhase1Reply(proto::Phase1Reply &reply) {
 
@@ -997,7 +1734,9 @@ void ShardClient::ProcessP1R(proto::Phase1Reply &reply, bool FB_path, PendingFB 
   std::unordered_map<uint64_t, PendingPhase1 *>::iterator itr;
   if(!FB_path){
     itr = this->pendingPhase1s.find(reply.req_id());
+    Debug("reply.req_id :%d", reply.req_id());
     if (itr == this->pendingPhase1s.end()) {
+      Debug("itr == this->pendingPhase1s.end() for id : %d", reply.req_id());
       return; // this is a stale request
     }
 
@@ -1009,7 +1748,7 @@ void ShardClient::ProcessP1R(proto::Phase1Reply &reply, bool FB_path, PendingFB 
 
   bool hasSigned = (params.validateProofs && params.signedMessages) &&
    (!reply.has_cc() || reply.cc().ccr() != proto::ConcurrencyControl::ABORT);
-
+  
   const proto::ConcurrencyControl *cc = nullptr;
   if (hasSigned) {
     Debug("[group %i] Verifying signed_cc from %lu with signatures bytes %lu"
@@ -1018,20 +1757,18 @@ void ShardClient::ProcessP1R(proto::Phase1Reply &reply, bool FB_path, PendingFB 
         reply.has_cc(),
         reply.cc().ccr());
     if (!reply.has_signed_cc()) {
+      Debug("!reply.has_signed_cc()\n");
       return;
     }
-
     if (!pendingPhase1->replicasVerified.insert(reply.signed_cc().process_id()).second) {
       Debug("Already verified signature from %lu.", reply.signed_cc().process_id());
       return;
     }
-
     if (!IsReplicaInGroup(reply.signed_cc().process_id(), group, config)) {
       Debug("[group %d] Phase1Reply from replica %lu who is not in group.",
           group, reply.signed_cc().process_id());
       return;
     }
-
     if (!verifier->Verify(keyManager->GetPublicKey(reply.signed_cc().process_id()),
           reply.signed_cc().data(), reply.signed_cc().signature())) {
       Debug("[group %i] Signature %s %s from replica %lu is not valid.", group,
@@ -1042,6 +1779,7 @@ void ShardClient::ProcessP1R(proto::Phase1Reply &reply, bool FB_path, PendingFB 
       return;
     }
     if (!validatedCC.ParseFromString(reply.signed_cc().data())) { //validatedCC is a global variable of type proto:CC
+      Debug("!reply.has_signed_cc()");
       return;
     }
 
@@ -1056,6 +1794,7 @@ void ShardClient::ProcessP1R(proto::Phase1Reply &reply, bool FB_path, PendingFB 
   Debug("[group %i] PHASE1R process ccr=%d", group, cc->ccr());
 
   if (!pendingPhase1->p1Validator.ProcessMessage(*cc, (failureActive && !FB_path) )) {
+    Debug("!pendingPhase1->p1Validator.ProcessMessage(*cc, (failureActive && !FB_path) )");
     return;
   }
 
@@ -1072,6 +1811,7 @@ void ShardClient::ProcessP1R(proto::Phase1Reply &reply, bool FB_path, PendingFB 
   }
 
   Phase1ValidationState state = pendingPhase1->p1Validator.GetState();
+
   switch (state) {
     case EQUIVOCATE:
       Debug("[group %i] Equivocation path taken [%lu]", group, reply.req_id());
@@ -1265,6 +2005,290 @@ void ShardClient::ProcessP1R(proto::Phase1Reply &reply, bool FB_path, PendingFB 
   }
 }
 
+void ShardClient::ProcessP1R_batch(std::vector<proto::Phase1Reply> &replies, bool FB_path, PendingFB *pendingFB, const std::string *txnDigest){
+
+  std::string messages;
+  for (int i = 0; i < replies.size(); i++){
+    messages.append(replies[i].signed_cc().data());
+  }
+
+  for (int i = 0; i < replies.size(); i++){
+    Debug("loop %d times", i);
+    PendingPhase1 *pendingPhase1;
+    std::unordered_map<uint64_t, PendingPhase1 *>::iterator itr;
+    if(!FB_path){
+      itr = this->pendingPhase1s.find(replies[i].req_id());
+      if (itr == this->pendingPhase1s.end()) {
+        Debug("itr == this->pendingPhase1s.end() for id : %d", replies[i].req_id());
+        return; // this is a stale request
+      }
+
+      pendingPhase1 = itr->second;
+    }
+    else {
+      pendingPhase1 = pendingFB->pendingP1;
+    }
+
+    bool hasSigned = (params.validateProofs && params.signedMessages) &&
+    (!replies[i].has_cc() || replies[i].cc().ccr() != proto::ConcurrencyControl::ABORT);
+    
+    const proto::ConcurrencyControl *cc = nullptr;
+    if (hasSigned) {
+      Debug("[group %i] Verifying signed_cc from %lu with signatures bytes %lu"
+          " because has_cc %d and ccr %d.",
+          group, replies[i].signed_cc().process_id(), replies[0].signed_cc().signature().length(),
+          replies[i].has_cc(),
+          replies[i].cc().ccr());
+      if (!replies[i].has_signed_cc()) {
+        Debug("!replies[i].has_signed_cc()");
+        return;
+      }
+      if (!pendingPhase1->replicasVerified.insert(replies[i].signed_cc().process_id()).second) {
+        Debug("Already verified signature from %lu.", replies[i].signed_cc().process_id());
+        return;
+      }
+      if (!IsReplicaInGroup(replies[i].signed_cc().process_id(), group, config)) {
+        Debug("[group %d] Phase1replies[i] from replica %lu who is not in group.",
+            group, replies[i].signed_cc().process_id());
+        return;
+      }
+      if (i == 0){
+        if (!verifier->Verify(keyManager->GetPublicKey(replies[i].signed_cc().process_id()),
+            messages, replies[i].signed_cc().signature())) {
+          Debug("[group %i] Signature %s %s from replica %lu is not valid.", group,
+                BytesToHex(replies[i].signed_cc().data(), 100).c_str(),
+                BytesToHex(replies[i].signed_cc().signature(), 100).c_str(),
+                replies[i].signed_cc().process_id());
+
+          return;
+        }
+      }
+      if (!validatedCC.ParseFromString(replies[i].signed_cc().data())) { //validatedCC is a global variable of type proto:CC
+        Debug("!validatedCC.ParseFromString(replies[i].signed_cc().data())\n");
+        return;
+      }
+
+      cc = &validatedCC;
+
+    } else {
+      UW_ASSERT(replies[i].has_cc());
+
+      cc = &replies[i].cc();
+    }
+
+    Debug("[group %i] PHASE1R process ccr=%d", group, cc->ccr());
+
+    if (!pendingPhase1->p1Validator.ProcessMessage(*cc, (failureActive && !FB_path) )) {
+      return;
+    }
+
+    if (hasSigned) {
+      proto::Signature *sig = pendingPhase1->p1ReplySigs[cc->ccr()].add_sigs();
+      sig->set_process_id(replies[i].signed_cc().process_id());
+      *sig->mutable_signature() = replies[i].signed_cc().signature();
+    }
+
+    //Keep track of conflicts.
+    if(replies[i].has_abstain_conflict()){
+      proto::Transaction* abstain_conflict = replies[i].release_abstain_conflict();
+      pendingPhase1->abstain_conflicts.insert(abstain_conflict);
+    }
+
+    Phase1ValidationState state = pendingPhase1->p1Validator.GetState();
+    switch (state) {
+      case EQUIVOCATE:
+        Debug("[group %i] Equivocation path taken [%lu]", group, replies[i].req_id());
+        pendingPhase1->decision = proto::COMMIT;
+        pendingPhase1->fast = false;
+        Phase1Decision(itr, true); //use non-default flag to elicit equivcocation path
+        break;
+      case FAST_COMMIT:
+        Debug("P1Validator STATE: FAST_COMMIT");
+        pendingPhase1->decision = proto::COMMIT;
+        pendingPhase1->fast = true;
+        !FB_path ? Phase1Decision(itr) : Phase1FBDecision(pendingFB);
+        break;
+      case FAST_ABORT:
+        Debug("P1Validator STATE: FAST_ABORT");
+        pendingPhase1->decision = proto::ABORT;
+        pendingPhase1->fast = true;
+        pendingPhase1->conflict_flag = true;
+        if (params.validateProofs) {
+          pendingPhase1->conflict = cc->committed_conflict();
+        }
+        !FB_path ? Phase1Decision(itr) : Phase1FBDecision(pendingFB);
+        break;
+      case FAST_ABSTAIN:  //INSERTED THIS NEW
+        Debug("P1Validator STATE: FAST_ABSTAIN");
+        pendingPhase1->decision = proto::ABORT;
+        pendingPhase1->fast = true;
+        !FB_path ? Phase1Decision(itr) : Phase1FBDecision(pendingFB);
+        break;
+      case SLOW_COMMIT_FINAL:
+        Debug("P1Validator STATE: SLOW_COMMIT_FINAL");
+        pendingPhase1->decision = proto::COMMIT;
+        pendingPhase1->fast = false;
+        !FB_path ? Phase1Decision(itr) : Phase1FBDecision(pendingFB);
+        break;
+      case SLOW_ABORT_FINAL:
+        Debug("P1Validator STATE: SLOW_ABORT_FINAL");
+        pendingPhase1->decision = proto::ABORT;
+        pendingPhase1->fast = false;
+        !FB_path ? Phase1Decision(itr) : Phase1FBDecision(pendingFB);
+        break;
+      case SLOW_COMMIT_TENTATIVE:
+        Debug("P1Validator STATE: SLOW_COMMIT_TENTATIVE - START TIMER");
+        if(phase1DecisionTimeout == 0 && pendingPhase1->first_decision){
+          pendingPhase1->first_decision = false;
+          pendingPhase1->decision = proto::COMMIT;
+          pendingPhase1->fast = false;
+          !FB_path ? Phase1Decision(itr) : Phase1FBDecision(pendingFB);
+        }
+        else{
+          if (!pendingPhase1->decisionTimeoutStarted){
+            if(!FB_path){
+              uint64_t reqId = replies[i].req_id();
+              pendingPhase1->decisionTimeout = new Timeout(transport,
+                  phase1DecisionTimeout, [this, reqId]() {
+                    auto itr = pendingPhase1s.find(reqId);
+                    if (itr == pendingPhase1s.end()) {
+                      return;
+                    }
+                    itr->second->decision = proto::COMMIT;
+                    itr->second->fast = false;
+                    Phase1Decision(itr);
+                  }
+                );
+            }
+            else{
+              pendingPhase1->decisionTimeout = new Timeout(transport,
+                phase1DecisionTimeout, [this, txnDig = *txnDigest]() {
+
+                  auto itr = pendingFallbacks.find(txnDig);
+                    if (itr == pendingFallbacks.end()) {
+                      return;
+                    }
+                    if(!itr->second->p1){
+                      itr->second->pendingP1->decisionTimeout->Stop();
+                      return;
+                    }
+                    Debug("P1Validator STATE: SLOW_COMMIT_TENTATIVE - Execute TIMER");
+                    itr->second->pendingP1->decision = proto::COMMIT;
+                    itr->second->pendingP1->fast = false;
+                    Phase1FBDecision(itr->second);
+                  }
+                );
+            }
+            pendingPhase1->decisionTimeout->Reset();
+            pendingPhase1->decisionTimeoutStarted = true;
+          }
+        }
+        break;
+
+      case SLOW_ABORT_TENTATIVE:
+        Debug("P1Validator STATE: SLOW_ABORT_TENTATIVE - START TIMER");
+        if(phase1DecisionTimeout == 0 && pendingPhase1->first_decision){
+          pendingPhase1->first_decision = false;
+          pendingPhase1->decision = proto::ABORT;
+          pendingPhase1->fast = false;
+          !FB_path ? Phase1Decision(itr) : Phase1FBDecision(pendingFB);
+        }
+        else{
+          if (!pendingPhase1->decisionTimeoutStarted) {
+            if(!FB_path){
+              uint64_t reqId = replies[i].req_id();
+              pendingPhase1->decisionTimeout = new Timeout(transport,
+                  phase1DecisionTimeout, [this, reqId]() {
+                    auto itr = pendingPhase1s.find(reqId);
+                    if (itr == pendingPhase1s.end()) {
+                      return;
+                    }
+                    itr->second->decision = proto::ABORT;
+                    itr->second->fast = false;
+                    Phase1Decision(itr);
+                  }
+                );
+            }
+            else{
+              pendingPhase1->decisionTimeout = new Timeout(transport,
+                phase1DecisionTimeout, [this, txnDig = *txnDigest]() {
+
+                  auto itr = pendingFallbacks.find(txnDig);
+                    if (itr == pendingFallbacks.end()) {
+                      return;
+                    }
+                    if(!itr->second->p1){
+                      itr->second->pendingP1->decisionTimeout->Stop();
+                      return;
+                    }
+                    Debug("P1Validator STATE: SLOW_ABORT_TENTATIVE - Execute TIMER");
+                    itr->second->pendingP1->decision = proto::ABORT;
+                    itr->second->pendingP1->fast = false;
+                    Phase1FBDecision(itr->second);
+                  }
+                );
+            }
+            pendingPhase1->decisionTimeout->Reset();
+            pendingPhase1->decisionTimeoutStarted = true;
+          }
+        }
+        break;
+      case SLOW_ABORT_TENTATIVE2:
+          Debug("P1Validator STATE: SLOW_ABORT_TENTATIVE2 - START TIMER");
+          if(phase1DecisionTimeout == 0 && pendingPhase1->first_decision){
+            pendingPhase1->first_decision = false;
+            pendingPhase1->decision = proto::ABORT;
+            pendingPhase1->fast = false;
+            !FB_path ? Phase1Decision(itr) : Phase1FBDecision(pendingFB);
+          }
+          else{
+            if (!pendingPhase1->decisionTimeoutStarted) {
+              if(!FB_path){
+                uint64_t reqId = replies[i].req_id();
+                pendingPhase1->decisionTimeout = new Timeout(transport,
+                    phase1DecisionTimeout, [this, reqId]() {
+                      auto itr = pendingPhase1s.find(reqId);
+                      if (itr == pendingPhase1s.end()) {
+                        return;
+                      }
+                      itr->second->decision = proto::ABORT;
+                      itr->second->fast = false;
+                      Phase1Decision(itr);
+                    }
+                  );
+              }
+              else{
+                pendingPhase1->decisionTimeout = new Timeout(transport,
+                    phase1DecisionTimeout, [this, txnDig = *txnDigest]() {
+
+                      auto itr = pendingFallbacks.find(txnDig);
+                      if (itr == pendingFallbacks.end()) {
+                        return;
+                      }
+                      if(!itr->second->p1){
+                        itr->second->pendingP1->decisionTimeout->Stop();
+                        return;
+                      }
+                      Debug("P1Validator STATE: SLOW_ABORT_TENTATIVE2 - Execute TIMER");
+                      itr->second->pendingP1->decision = proto::ABORT;
+                      itr->second->pendingP1->fast = false;
+                      Phase1FBDecision(itr->second);
+                    }
+                  );
+              }
+              pendingPhase1->decisionTimeout->Reset();
+              pendingPhase1->decisionTimeoutStarted = true;
+            }
+          }
+          break;
+      case NOT_ENOUGH:
+        break;
+      default:
+        break;
+    }
+  }
+}
+
 void ShardClient::HandlePhase2Reply(const proto::Phase2Reply &reply) {
   auto itr = this->pendingPhase2s.find(reply.req_id());
   if (itr == this->pendingPhase2s.end()) {
@@ -1443,7 +2467,7 @@ void ShardClient::Phase1Decision(uint64_t reqId) {
 }
 
 void ShardClient::Phase1Decision(
-    std::unordered_map<uint64_t, PendingPhase1 *>::iterator itr, bool eqv_ready) {
+  std::unordered_map<uint64_t, PendingPhase1 *>::iterator itr, bool eqv_ready) {
 
       // struct timeval tv;
       // gettimeofday(&tv, NULL);
@@ -1462,6 +2486,8 @@ void ShardClient::Phase1Decision(
   //   pendingPhase1->decisionTimeout = nullptr;
   // }
   //std::cerr << "Failing on normal path" << std::endl;
+  Debug("ShardClient::Phase1Decision");
+  Debug("pendingPhase1->reqId : %d", pendingPhase1->reqId);
   pendingPhase1->pcb(pendingPhase1->decision, pendingPhase1->fast, pendingPhase1->conflict_flag,
       pendingPhase1->conflict, pendingPhase1->p1ReplySigs, eqv_ready);
 
@@ -1703,6 +2729,44 @@ void ShardClient::Phase1FB(uint64_t reqId, proto::Transaction &txn, const std::s
 
   transport->SendMessageToGroup(this, group, phase1FB);
 
+  //pendingPhase1->requestTimeout->Reset();
+}
+
+//TODO: Move all callbacks (also in client.)
+void ShardClient::Phase1FB_batch(uint64_t reqId, proto::Transaction &txn, const std::string &txnDigest,
+ relayP1FB_callback rP1FB, phase1FB_callbackA p1FBcbA, phase1FB_callbackB p1FBcbB,
+ phase2FB_callback p2FBcb, writebackFB_callback wbFBcb, invokeFB_callback invFBcb, int64_t logGrp) {
+
+  Debug("[group %i] Sending PHASE1FB [%lu]", group, client_id);
+  //uint64_t reqId = lastReqId++;
+
+  PendingFB* pendingFB = new PendingFB();
+  pendingFallbacks[txnDigest] = pendingFB;
+
+  PendingPhase1 *pendingPhase1 = new PendingPhase1(reqId, group, txn,
+      txnDigest, config, keyManager, params, verifier, 0);
+  pendingFB->pendingP1 = pendingPhase1;
+
+  pendingFB->logGrp = logGrp;
+
+  //set all callbacks
+  //TODO: need to have relayP1 of its own in theory, to support deeper deps.
+  pendingFB->rcb = rP1FB;
+  pendingFB->wbFBcb = wbFBcb;
+  pendingFB->p1FBcbA = p1FBcbA;
+  pendingFB->p1FBcbB = p1FBcbB;
+  pendingFB->p2FBcb = p2FBcb;
+  pendingFB->invFBcb = invFBcb;
+
+  // create prepare request
+  phase1FB_batch.clear();
+  phase1FB.Clear();
+  phase1FB.set_req_id(reqId);
+  *phase1FB.mutable_txn() = txn;
+
+  phase1FB_batch.push_back(&phase1FB);
+
+  transport->SendMessageToGroup_batch(this, group, phase1FB_batch);
   //pendingPhase1->requestTimeout->Reset();
 }
 

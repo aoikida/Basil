@@ -48,10 +48,13 @@
 #include "store/indicusstore/indicus-proto.pb.h"
 #include "store/indicusstore/phase1validator.h"
 #include "store/common/pinginitiator.h"
+#include "store/indicusstore/maxsize.h"
 
 #include <map>
 #include <string>
 #include <vector>
+
+
 
 namespace indicusstore {
 static int callP2FB = 0;
@@ -61,6 +64,8 @@ typedef std::function<void(int, const std::string &,
     const std::string &, const Timestamp &, const proto::Dependency &,
     bool, bool)> read_callback;
 typedef std::function<void(int, const std::string &)> read_timeout_callback;
+
+typedef std::function<void(int, const std::vector<std::string> &, std::vector<get_callback> &, uint32_t)> read_timeout_callback_batch;
 
 typedef std::function<void(proto::CommitDecision, bool, bool,
     const proto::CommittedProof &,
@@ -107,23 +112,47 @@ class ShardClient : public TransportReceiver, public PingInitiator, public PingT
       const std::string &type, const std::string &data,
       void *meta_data) override;
 
+  virtual void ReceiveMessage_batch(const TransportAddress &remote,
+      const std::vector<std::string> &types, const std::vector<std::string> &datas,
+      void *meta_data) override;
+
   // Begin a transaction.
   virtual void Begin(uint64_t id);
+
+  virtual void Begin_batch(uint64_t id, int batch_num);
 
   // Get the value corresponding to key.
   virtual void Get(uint64_t id, const std::string &key, const TimestampMessage &ts,
       uint64_t readMessages, uint64_t rqs, uint64_t rds, read_callback gcb,
-      read_timeout_callback gtcb, uint32_t timeout);
+      read_timeout_callback gtc, uint32_t timeout);
+
+  //追加
+  virtual void Get_batch(uint64_t id, const std::vector<std::string> &key_list,
+    const std::vector<TimestampMessage> &ts_list, uint64_t readMessages, uint64_t rqs,
+    uint64_t rds, std::vector<read_callback> &rcb_list, read_timeout_callback_batch gtcb,
+    uint32_t timeout);
 
   // Set the value for the given key.
   virtual void Put(uint64_t id, const std::string &key,
       const std::string &value, put_callback pcb, put_timeout_callback ptcb,
       uint32_t timeout);
+  
+  virtual void Put_ycsb(uint64_t id, const std::string &key,
+      const std::string &value, put_callback_ycsb pcb, put_timeout_callback ptcb, Xoroshiro128Plus &rnd, FastZipf &zipf,
+      uint32_t timeout);
 
   virtual void Phase1(uint64_t id, const proto::Transaction &transaction, const std::string &txnDigest,
     phase1_callback pcb, phase1_timeout_callback ptcb, relayP1_callback rcb, finishConflictCB fcb, uint32_t timeout);
+
+  virtual void Phase1_batch(uint64_t id, proto::Transaction * transactions, const std::vector<std::string> &txnDigest,
+  std::vector<phase1_callback> &pcb, std::vector<phase1_timeout_callback> &ptcb, std::vector<relayP1_callback> &rcb, std::vector<finishConflictCB> &fcb, uint32_t timeout);
+
   virtual void StopP1(uint64_t client_seq_num);
   virtual void Phase2(uint64_t id, const proto::Transaction &transaction,
+      const std::string &txnDigest, proto::CommitDecision decision,
+      const proto::GroupedSignatures &groupedSigs, phase2_callback pcb,
+      phase2_timeout_callback ptcb, uint32_t timeout);
+  virtual void Phase2_batch(uint64_t id, const proto::Transaction &transaction,
       const std::string &txnDigest, proto::CommitDecision decision,
       const proto::GroupedSignatures &groupedSigs, phase2_callback pcb,
       phase2_timeout_callback ptcb, uint32_t timeout);
@@ -135,6 +164,9 @@ virtual void Phase2Equivocate_Simulate(uint64_t id, const proto::Transaction &tx
       const proto::GroupedSignatures &groupedCommitSigs, const proto::GroupedSignatures &groupedAbortSigs,
       phase2_callback pcb, phase2_timeout_callback ptcb, uint32_t timeout);
   virtual void Writeback(uint64_t id, const proto::Transaction &transaction, const std::string &txnDigest,
+    proto::CommitDecision decision, bool fast, bool conflict_flag, const proto::CommittedProof &conflict,
+    const proto::GroupedSignatures &p1Sigs, const proto::GroupedSignatures &p2Sigs, uint64_t decision_view = 0UL);
+  virtual void Writeback_batch(uint64_t id, const proto::Transaction &transaction, const std::string &txnDigest,
     proto::CommitDecision decision, bool fast, bool conflict_flag, const proto::CommittedProof &conflict,
     const proto::GroupedSignatures &p1Sigs, const proto::GroupedSignatures &p2Sigs, uint64_t decision_view = 0UL);
   //overloaded function for fallback
@@ -154,6 +186,9 @@ virtual void Phase2Equivocate_Simulate(uint64_t id, const proto::Transaction &tx
   virtual void EraseRelay(const std::string &txnDigest);
   virtual void StopP1FB(std::string &txnDigest);
   virtual void Phase1FB(uint64_t reqId, proto::Transaction &txn, const std::string &txnDigest,
+   relayP1FB_callback rP1FB, phase1FB_callbackA p1FBcbA, phase1FB_callbackB p1FBcbB,
+   phase2FB_callback p2FBcb, writebackFB_callback wbFBcb, invokeFB_callback invFBcb, int64_t logGrp);
+  virtual void Phase1FB_batch(uint64_t reqId, proto::Transaction &txn, const std::string &txnDigest,
    relayP1FB_callback rP1FB, phase1FB_callbackA p1FBcbA, phase1FB_callbackB p1FBcbB,
    phase2FB_callback p2FBcb, writebackFB_callback wbFBcb, invokeFB_callback invFBcb, int64_t logGrp);
   virtual void Phase2FB(uint64_t id,const proto::Transaction &txn, const std::string &txnDigest,proto::CommitDecision decision,
@@ -194,7 +229,8 @@ virtual void Phase2Equivocate_Simulate(uint64_t id, const proto::Transaction &tx
     proto::Dependency dep;
     bool hasDep;
     read_callback gcb;
-    read_timeout_callback gtcb;
+    read_timeout_callback gtc;
+    read_timeout_callback_batch gtcb;
     bool firstCommittedReply;
   };
 
@@ -354,10 +390,15 @@ virtual void Phase2Equivocate_Simulate(uint64_t id, const proto::Transaction &tx
   /* Timeout for Get requests, which only go to one replica. */
   void GetTimeout(uint64_t reqId);
 
+  //void GetTimeout_batch(uint64_t reqId);
+
   /* Callbacks for hearing back from a shard for an operation. */
   void HandleReadReply(const proto::ReadReply &readReply);
+  void HandleReadReply_batch(const std::vector<proto::ReadReply> &readReplies);
+  void HandleReadReply_sig_batch(const std::vector<proto::ReadReply> &readReplies);
   void HandlePhase1Reply(proto::Phase1Reply &phase1Reply);
   void ProcessP1R(proto::Phase1Reply &reply, bool FB_path = false, PendingFB *pendingFB = nullptr, const std::string *txnDigest = nullptr);
+  void ProcessP1R_batch(std::vector<proto::Phase1Reply> &replies, bool FB_path = false, PendingFB *pendingFB = nullptr, const std::string *txnDigest = nullptr);
   void HandleP1REquivocate(const proto::Phase1Reply &phase1Reply);
   void HandlePhase2Reply(const proto::Phase2Reply &phase2Reply);
   void HandlePhase2Reply_MultiView(const proto::Phase2Reply &reply);
@@ -451,19 +492,30 @@ virtual void Phase2Equivocate_Simulate(uint64_t id, const proto::Transaction &tx
   //keep additional maps for this from txnDigest ->Pending For Fallback instances?
 
   proto::Read read;
+  proto::Read reads [MAX_MESSAGE_SIZE];
+  std::vector<Message *> read_batch;
+  
   proto::Phase1 phase1;
+  proto::Phase1 phase1s [MAX_TRANSACTION_SIZE];
+  std::vector<Message *> phase1_batch;
+
   proto::Phase2 phase2;
+  proto::Phase2 phase2s [MAX_TRANSACTION_SIZE];
+  std::vector<Message *> phase2_batch;
+
   proto::Writeback writeback;
+  std::vector<Message *> writeback_batch;
   proto::Abort abort;
   proto::ReadReply readReply;
   proto::Phase1Reply phase1Reply;
   proto::Phase2Reply phase2Reply;
   PingMessage ping;
-
+  
 
   //FALLBACK
   proto::RelayP1 relayP1;
   proto::Phase1FB phase1FB;
+  std::vector<Message *> phase1FB_batch;
   proto::Phase2FB phase2FB;
   proto::Phase1FBReply phase1FBReply;
   proto::Phase2FBReply phase2FBReply;

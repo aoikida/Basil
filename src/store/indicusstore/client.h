@@ -47,6 +47,8 @@
 #include "store/indicusstore/indicus-proto.pb.h"
 #include <sys/time.h>
 #include "store/common/stats.h"
+#include "store/common/random.h"
+#include "store/common/zipf.h"
 #include <unistd.h>
 
 #include <thread>
@@ -72,7 +74,8 @@ class Client : public ::Client {
       Transport *transport, Partitioner *part, bool syncCommit,
       uint64_t readMessages, uint64_t readQuorumSize,
       Parameters params, KeyManager *keyManager, uint64_t phase1DecisionTimeout,
-      uint64_t consecutiveMax = 1UL,
+      Xoroshiro128Plus &rnd, FastZipf &zipf,
+      uint64_t consecutiveMax = 1UL,  
       TrueTime timeserver = TrueTime(0,0));
   virtual ~Client();
 
@@ -80,18 +83,43 @@ class Client : public ::Client {
   virtual void Begin(begin_callback bcb, begin_timeout_callback btcb,
       uint32_t timeout, bool retry = false) override;
 
+  virtual void Begin_ycsb(begin_callback_ycsb bcb, begin_timeout_callback btcb,
+      uint32_t timeout, bool retry = false) override;
+
+  virtual void Begin_batch(begin_callback_batch bcbb, begin_timeout_callback btcb,
+      uint32_t timeout, bool retry = false) override;
+
   // Get the value corresponding to key.
   virtual void Get(const std::string &key, get_callback gcb,
       get_timeout_callback gtcb, uint32_t timeout = GET_TIMEOUT) override;
+
+  virtual void Get_ycsb(const std::string &key, get_callback_ycsb gcby,
+      get_timeout_callback gtcb, uint32_t timeout = GET_TIMEOUT) override;
+
+  //追加
+  virtual void Get_batch(const std::vector<std::string>& key_list, std::vector<get_callback>& gcb_list, std::multimap<std::string, int> *keyTxMap, 
+      get_timeout_callback_batch gtcb, uint32_t timeout = GET_TIMEOUT) override;
 
   // Set the value for the given key.
   virtual void Put(const std::string &key, const std::string &value,
       put_callback pcb, put_timeout_callback ptcb,
       uint32_t timeout = PUT_TIMEOUT) override;
+  
+  virtual void Put_ycsb(const std::string &key, const std::string &value,
+      put_callback_ycsb pcby, put_timeout_callback ptcb,
+      uint32_t timeout = PUT_TIMEOUT) override;
+
+  virtual void Put_batch(const std::string &key, const std::string &value,
+      put_callback pcb, put_timeout_callback ptcb,
+      int batch_num, uint32_t timeout = PUT_TIMEOUT) override;
 
   // Commit all Get(s) and Put(s) since Begin().
   virtual void Commit(commit_callback ccb, commit_timeout_callback ctcb,
       uint32_t timeout) override;
+
+  // Commit all Get(s) and Put(s) since Begin().
+  virtual void Commit_batch(commit_callback_batch ccb, commit_timeout_callback ctcb,
+      uint32_t timeout, int batch_size_at_commit) override;
 
   // Abort all Get(s) and Put(s) since Begin().
   virtual void Abort(abort_callback acb, abort_timeout_callback atcb,
@@ -127,7 +155,8 @@ class Client : public ::Client {
     }
 
     Client *client;
-    commit_callback ccb;
+    commit_callback cc;
+    commit_callback_batch ccb;
     commit_timeout_callback ctcb;
     uint64_t id;
     int outstandingPhase1s;
@@ -150,6 +179,7 @@ class Client : public ::Client {
     proto::CommittedProof conflict;
     //added this for fallback handling
     proto::Transaction txn;
+    std::vector<proto::Transaction> txnBatch;
     proto::P2Replies p2Replies;
 
     int64_t logGrp;
@@ -170,6 +200,8 @@ class Client : public ::Client {
 
   void Phase1(PendingRequest *req);
 
+  void Phase1_batch(std::vector<PendingRequest *>& requests);
+
   void Phase1Callback(uint64_t reqId, int group, proto::CommitDecision decision,
       bool fast, bool conflict_flag, const proto::CommittedProof &conflict,
       const std::map<proto::ConcurrencyControl::Result,
@@ -186,6 +218,7 @@ class Client : public ::Client {
   void HandleAllPhase1Received(PendingRequest *req);
 
   void Phase2(PendingRequest *req);
+  void Phase2_batch(PendingRequest *req);
   void Phase2Processing(PendingRequest *req);
   void Phase2SimulateEquivocation(PendingRequest *req);
   void Phase2Equivocate(PendingRequest *req);
@@ -195,6 +228,7 @@ class Client : public ::Client {
   void Phase2TimeoutCallback(int group, uint64_t reqId, int status);
   void WritebackProcessing(PendingRequest *req);
   void Writeback(PendingRequest *req);
+  void Writeback_batch(PendingRequest *req);
   void FailureCleanUp(PendingRequest *req);
   void ForwardWBcallback(uint64_t txnId, int group, proto::ForwardWriteback &forwardWB);
 
@@ -242,6 +276,8 @@ class Client : public ::Client {
 
   bool IsParticipant(int g) const;
 
+  bool IsParticipant_batch(int g) const;
+
   /* Configuration State */
   transport::Configuration *config;
   // Unique ID for this client.
@@ -285,6 +321,21 @@ class Client : public ::Client {
   long retries;
   // Current transaction.
   proto::Transaction txn;
+  // 追加 トランザクションの集合:バッチ
+  proto::Transaction txnBatch[MAX_TRANSACTION_SIZE];
+  std::vector<read_callback> rcb_list;
+  std::vector<TimestampMessage> timestamp_list;
+  std::vector<phase1_callback> phase1_callback_batch;
+  std::vector<phase1_timeout_callback> phase1_timeout_callback_batch;
+  std::vector<relayP1_callback> relayP1_callback_batch;
+  std::vector<finishConflictCB> finishConflictCB_batch;
+  int writeback_tx_num = 0;
+  std::vector<int> abort_tx_nums;
+
+  Xoroshiro128Plus rnd;
+  FastZipf zipf;
+  
+
   // Outstanding requests.
   std::unordered_map<uint64_t, PendingRequest *> pendingReqs;
 
@@ -301,6 +352,7 @@ class Client : public ::Client {
   size_t getIdx;
   struct Latency_t commitLatency;
 };
+
 
 } // namespace indicusstore
 
