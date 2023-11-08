@@ -87,6 +87,7 @@ Replica::Replica(const transport::Configuration &config, KeyManager *keyManager,
       sessionKeys[i] = std::string(8, (char) i + 0x30) + std::string(8, (char) idx + 0x30);
     }
   }
+  Debug("End Initialized replica at %d %d", groupIdx, idx);
 }
 
 Replica::~Replica() {}
@@ -175,6 +176,9 @@ void Replica::ReceiveMessage(const TransportAddress &remote, const string &t,
     }
 }
 
+void Replica::ReceiveMessage_batch(const TransportAddress &remote, const std::vector<string> &types,
+                          const std::vector<string> &datas, void *meta_data) {}
+
 void Replica::HandleRequest(const TransportAddress &remote,
                                const proto::Request &request) {
   Notice("Handling request message");
@@ -188,11 +192,15 @@ void Replica::HandleRequest(const TransportAddress &remote,
     // clone remote mapped to request for reply
     replyAddrs[digest] = remote.clone();
 
+    Notice("before execb");
     // prepare the callback function for HotStuff
     hotstuff_exec_callback execb = [this](const std::string &digest) {
+      Notice("execb start");
         if (requests.find(digest) != requests.end()) {
             proto::PackedMessage packedMsg = requests[digest];
+            Notice("Before Execute");
             std::vector<::google::protobuf::Message*> replies = app->Execute(packedMsg.type(), packedMsg.msg());
+            Notice("After Execute");
             for (const auto& reply : replies) {
                 if (reply != nullptr) {
                     Debug("Sending reply");

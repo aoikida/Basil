@@ -154,6 +154,10 @@ void ShardClient::ReceiveMessage(const TransportAddress &remote,
     }
 }
 
+void ShardClient::ReceiveMessage_batch(const TransportAddress &remote,
+    const std::vector<std::string> &types, const std::vector<std::string> &datas,
+    void *meta_data) {}
+
 // ================================
 // ======= MESSAGE HANDLERS =======
 // ================================

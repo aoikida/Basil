@@ -69,6 +69,10 @@ class ShardClient : public TransportReceiver {
       const std::string &type, const std::string &data,
       void *meta_data);
 
+  void ReceiveMessage_batch(const TransportAddress &remote,
+      const std::vector<std::string> &types, const std::vector<std::string> &data,
+      void *meta_data);
+
   // Get the value corresponding to key.
   void Get(const std::string &key, const Timestamp &ts,
       uint64_t numResults, read_callback gcb, read_timeout_callback gtcb,
