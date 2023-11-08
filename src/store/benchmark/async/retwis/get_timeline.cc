@@ -48,4 +48,11 @@ Operation GetTimeline::GetNextOperation(size_t outstandingOpCount, size_t finish
   }
 }
 
+Operation GetTimeline::GetNextOperation_ycsb(size_t outstandingOpCount, size_t finishedOpCount,
+      std::map<std::string, std::string> readValues, Xoroshiro128Plus &rnd, FastZipf &zipf){}
+
+//追加
+Operation GetTimeline::GetNextOperation_batch(size_t outstandingOpCount, size_t finishedOpCount,
+      std::map<std::string, std::string> readValues, int batchSize, Xoroshiro128Plus &rnd, FastZipf &zipf){}
+
 } // namespace retwis

@@ -51,6 +51,8 @@ class RetwisClient : public AsyncTransactionBenchClient {
 
  protected:
   virtual AsyncTransaction *GetNextTransaction();
+  virtual AsyncTransaction *GetNextTransaction_ycsb();
+  virtual AsyncTransaction *GetNextTransaction_batch();
   virtual std::string GetLastOp() const;
 
  private:

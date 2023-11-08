@@ -54,4 +54,11 @@ Operation Follow::GetNextOperation(size_t outstandingOpCount, size_t finishedOpC
   }
 }
 
+Operation Follow::GetNextOperation_ycsb(size_t outstandingOpCount, size_t finishedOpCount,
+      std::map<std::string, std::string> readValues, Xoroshiro128Plus &rnd, FastZipf &zipf){}
+
+//追加
+Operation Follow::GetNextOperation_batch(size_t outstandingOpCount, size_t finishedOpCount,
+      std::map<std::string, std::string> readValues, int batchSize, Xoroshiro128Plus &rnd, FastZipf &zipf){}
+
 } // namespace retwis
