@@ -14,6 +14,8 @@
 
 using namespace std;
 
+//このファイル多分あつい
+
 // Function to pick a random key according to some distribution.
 int rand_key();
 
@@ -27,6 +29,7 @@ int nKeys = 100;
 int
 main(int argc, char **argv)
 {
+    Debug("benchClient.cc main start \n");
     const char *configPath = NULL;
     const char *keysPath = NULL;
     int duration = 10;

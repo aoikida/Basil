@@ -48,6 +48,15 @@ class PingServer : public TransportReceiver {
     transport->SendMessage(this, addr, pm);
   }
 
+  virtual void ReceiveMessage_batch(const TransportAddress &addr,
+      const std::vector<std::string> &types, const std::vector<std::string> &datas,
+      void *meta_data) override {
+
+    //pm.ParseFromString(data);
+    //transport->SendMessage(this, addr, pm);
+
+  }
+
  private:
   const transport::Configuration &config;
   Transport *transport;

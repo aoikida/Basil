@@ -123,6 +123,23 @@ class PingClient : public TransportReceiver {
     }
   }
 
+  virtual void ReceiveMessage_batch(const TransportAddress &addr,
+      const std::vector<std::string> &types, const std::vector<std::string> &datas,
+      void *meta_data) override {
+    uint64_t ns = Latency_End(&rtt);
+    latencies.push_back(ns);
+    receivedMessages++;
+    /*
+    if (receivedMessages < numMessages) {
+      GenerateMessageData(pm.mutable_data());
+      Latency_Start(&rtt);
+      transport->SendMessageToReplica(this, 0, pm);    
+    } else {
+      transport->Stop();
+    }
+    */
+  }
+
  private:
   const transport::Configuration &config;
   Transport *transport;
