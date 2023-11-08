@@ -36,7 +36,7 @@ class AsyncOneShotAdapterClient : public AsyncClient {
   virtual ~AsyncOneShotAdapterClient();
 
   // Begin a transaction.
-  virtual void Execute(AsyncTransaction *txn, execute_callback ecb, bool retry = false);
+  virtual void Execute(AsyncTransaction *txn, execute_callback ecb, bool retry = false, bool batchOptimization = false);
 
  private:
   void ExecuteNextOperation();

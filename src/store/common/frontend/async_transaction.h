@@ -42,6 +42,12 @@ class AsyncTransaction {
   virtual Operation GetNextOperation(size_t outstandingOpCount, size_t finishedOpCount,
       const std::map<std::string, std::string> readValues) = 0;
 
+  virtual Operation GetNextOperation_ycsb(size_t outstandingOpCount, size_t finishedOpCount,
+      const std::map<std::string, std::string> readValues, Xoroshiro128Plus &rnd, FastZipf &zipf) = 0;
+
+  virtual Operation GetNextOperation_batch(size_t outstandingOpCount, size_t finishedOpCount,
+      const std::map<std::string, std::string> readValues, int batchSize, Xoroshiro128Plus &rnd, FastZipf &zipf) = 0;
+
 };
 
 #endif

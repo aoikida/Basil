@@ -51,6 +51,10 @@ class SyncClient {
   SyncClient(Client *client);
   virtual ~SyncClient();
 
+  //virtual void Execute(SyncTransaction *txn, execute_callback ecb, bool retry=false) = 0;
+
+  //virtual void Execute_batch(SyncTransaction *txn, execute_callback_batch ecb, bool retry=false) = 0;
+
   // Begin a transaction.
   virtual void Begin(uint32_t timeout);
 

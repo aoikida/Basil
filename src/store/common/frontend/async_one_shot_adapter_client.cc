@@ -34,7 +34,7 @@ AsyncOneShotAdapterClient::~AsyncOneShotAdapterClient() {
 }
 
 void AsyncOneShotAdapterClient::Execute(AsyncTransaction *txn,
-    execute_callback ecb, bool retry) {
+    execute_callback ecb, bool retry, bool batchOptimization) {
   OneShotTransaction oneShotTxn;
   Operation op;
   std::map<std::string, std::string> emptyReadValues;

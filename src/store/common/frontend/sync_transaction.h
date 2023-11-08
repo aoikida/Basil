@@ -29,6 +29,7 @@
 
 #include "store/common/frontend/client.h"
 #include "store/common/frontend/transaction_utils.h"
+#include "store/common/frontend/sync_client.h"
 
 #include <functional>
 #include <map>
@@ -36,10 +37,18 @@
 
 class SyncTransaction {
  public:
-  SyncTransaction(uint32_t timeout) : timeout(timeout) { }
+  SyncTransaction(uint32_t timeout) : timeout(timeout) {}
   virtual ~SyncTransaction() { }
 
   virtual transaction_status_t Execute(SyncClient &client) = 0;
+
+  //virtual std::vector<transaction_status_t> Execute_batch(SyncClient &client) = 0;
+
+  //virtual Operation GetNextOperation(size_t outstandingOpCount, size_t finishedOpCount,
+      //const std::map<std::string, std::string> readValues) = 0;
+
+  //virtual Operation GetNextOperation_batch(size_t outstandingOpCount, size_t finishedOpCount,
+      //const std::map<std::string, std::string> readValues, int batchSize, Xoroshiro128Plus &rnd, FastZipf &zipf) = 0;
 
  protected:
   const uint32_t timeout;
