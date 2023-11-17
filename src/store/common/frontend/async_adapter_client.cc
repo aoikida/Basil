@@ -421,7 +421,6 @@ void AsyncAdapterClient::GetCallback_batch(int status, const std::string &key,
   Debug("Get(%s) callback.", key.c_str());
   readValues.insert(std::make_pair(key, val));
   getCbCount++;
-  std::cout << "getCbCount : " << getCbCount << std::endl;
   if (readOpNum <= getCbCount){
       ExecuteCommit();
       getCbCount = 0;
