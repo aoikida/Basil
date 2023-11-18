@@ -245,7 +245,7 @@ DEFINE_uint64(indicus_inject_failure_freq, 100, "number of transactions per ONE 
 DEFINE_bool(indicus_read_reply_batch, false, "true read reply false no read reply batch(for Indicus)");
 
 DEFINE_uint64(indicus_phase1DecisionTimeout, 1000UL, "p1 timeout before going slowpath");
-DEFINE_bool(indicus_multi_threading, false, "dispatch crypto to parallel threads");
+DEFINE_bool(indicus_multi_threading, true, "dispatch crypto to parallel threads");
 DEFINE_bool(indicus_batch_verification, false, "using ed25519 donna batch verification");
 DEFINE_uint64(indicus_batch_verification_size, 48, "batch size for ed25519 donna batch verification");
 DEFINE_uint64(indicus_batch_verification_timeout, 5, "batch verification timeout, ms");
@@ -255,7 +255,7 @@ DEFINE_bool(pbft_validate_abort, false, "validate abort writebacks as well");
 
 DEFINE_bool(indicus_parallel_CCC, true, "sort read/write set for parallel CCC locking at server");
 
-DEFINE_bool(indicus_hyper_threading, false, "use hyperthreading");
+DEFINE_bool(indicus_hyper_threading, true, "use hyperthreading");
 
 DEFINE_bool(indicus_no_fallback, true, "turn off fallback protocol");
 DEFINE_uint64(indicus_max_consecutive_abstains, 1, "number of consecutive conflicts before fallback is triggered");
