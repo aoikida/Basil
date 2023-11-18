@@ -581,7 +581,6 @@ void asyncValidateP1Replies(proto::CommitDecision decision,
   // For abort check whether the one group is part of the involved groups.
   
   asyncVerification *verifyObj = new asyncVerification(quorumSize, std::move(mcb), txn->involved_groups_size(), decision, transport);
-  //std::unique_lock<std::mutex> lock(verifyObj->objMutex);
 
   std::vector<std::pair<std::function<void*()>,std::function<void(void*)>>> verificationJobs;
   std::vector<std::function<void*()>> verificationJobs2;
@@ -615,9 +614,10 @@ void asyncValidateP1Replies(proto::CommitDecision decision,
         Debug("Signature for group %lu from replica %lu who is not in group.", sigs.first, sig.process_id());
         Panic("Received sig from replica[%lu] not in group", sig.process_id());
         //{
-        std::lock_guard<std::mutex> lock(verifyObj->objMutex);
-        verifyObj->terminate = true;
+        //std::lock_guard<std::mutex> lock(verifyObj->objMutex);
+        //verifyObj->terminate = true;
         //}
+        std::unique_lock<std::mutex> lock(verifyObj->objMutex);
         verifyObj->mcb((void*) false);
         delete verifyObj;
         return;
@@ -630,9 +630,10 @@ void asyncValidateP1Replies(proto::CommitDecision decision,
             sig.process_id(), sigs.first);
         Panic("Received duplicate signature from server %u", sig.process_id());
         //{
-        std::lock_guard<std::mutex> lock(verifyObj->objMutex);
-        verifyObj->terminate = true;
+        //std::lock_guard<std::mutex> lock(verifyObj->objMutex);
+        //verifyObj->terminate = true;
         //}
+        std::unique_lock<std::mutex> lock(verifyObj->objMutex);
         verifyObj->mcb((void*) false);
         delete verifyObj;
         return;
@@ -656,10 +657,12 @@ void asyncValidateP1Replies(proto::CommitDecision decision,
                 if(verifyObj->groupsVerified == verifyObj->groupTotals){
                   if(!LocalDispatch){
                     Debug("!LocalDispatch");
+                    std::unique_lock<std::mutex> lock(verifyObj->objMutex);
                     verifyObj->mcb((void*) true);
                   }
                   else{
                     Debug("Issuing MCB to be scheduled as mainthread event ");
+                    std::unique_lock<std::mutex> lock(verifyObj->objMutex);
                     verifyObj->tp->IssueCB(std::move(verifyObj->mcb), (void*) true);
                   }
                   delete verifyObj;
@@ -668,10 +671,12 @@ void asyncValidateP1Replies(proto::CommitDecision decision,
               }
               else{ //Abort only needs 1 group.
                 if(!LocalDispatch){
+                  std::unique_lock<std::mutex> lock(verifyObj->objMutex);
                   verifyObj->mcb((void*) true);
                 }
                 else{
                   Debug("Issuing MCB to be scheduled as mainthread event ");
+                  std::unique_lock<std::mutex> lock(verifyObj->objMutex);
                   verifyObj->tp->IssueCB(std::move(verifyObj->mcb), (void*) true);
                 }
                 delete verifyObj;
@@ -684,6 +689,7 @@ void asyncValidateP1Replies(proto::CommitDecision decision,
               concurrencyControl.ccr(), sig.process_id(), myProcessId, myResult);
           std::cerr << "stored CCR[" <<  myResult << "] does not match signed CCR[ " << concurrencyControl.ccr() << "] for txn " << BytesToHex(*txnDigest, 64) << std::endl;
           Panic("Aborting due to mismatch");
+          std::unique_lock<std::mutex> lock(verifyObj->objMutex);
           verifyObj->mcb((void*) false);
           delete verifyObj;
           return;
