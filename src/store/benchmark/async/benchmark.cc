@@ -255,7 +255,7 @@ DEFINE_bool(pbft_validate_abort, false, "validate abort writebacks as well");
 
 DEFINE_bool(indicus_parallel_CCC, true, "sort read/write set for parallel CCC locking at server");
 
-DEFINE_bool(indicus_hyper_threading, true, "use hyperthreading");
+DEFINE_bool(indicus_hyper_threading, false, "use hyperthreading");
 
 DEFINE_bool(indicus_no_fallback, true, "turn off fallback protocol");
 DEFINE_uint64(indicus_max_consecutive_abstains, 1, "number of consecutive conflicts before fallback is triggered");
@@ -411,9 +411,9 @@ DEFINE_validator(benchmark, &ValidateBenchmark);
  * Experiment settings.
  */
 DEFINE_uint64(exp_duration, 30, "duration (in seconds) of experiment");
-DEFINE_uint64(warmup_secs, 5, "time (in seconds) to warm up system before"
+DEFINE_uint64(warmup_secs, 10, "time (in seconds) to warm up system before"
     " recording stats");
-DEFINE_uint64(cooldown_secs, 5, "time (in seconds) to cool down system after"
+DEFINE_uint64(cooldown_secs, 10, "time (in seconds) to cool down system after"
     " recording stats");
 DEFINE_uint64(tput_interval, 0, "time (in seconds) between throughput"
     " measurements");
@@ -1201,6 +1201,22 @@ int main(int argc, char **argv) {
   tport->Run();
 
 
+  int latencySize = 0;
+  uint64_t ns = 0;
+  char buf[1024];
+
+  for (int i = 0; i < FLAGS_num_clients; i++){
+    for (auto latency : benchClients[i]->latencies) {
+      ns += latency;
+      latencySize++;
+    }
+  }
+
+  ns = ns / latencySize;
+
+  LatencyFmtNS(ns, buf);
+  Notice("latency is %ld ns (%s)", ns, buf);
+  Notice("throughput is %d", latencySize / FLAGS_exp_duration);
 
   Cleanup(0);
 
@@ -1208,7 +1224,7 @@ int main(int argc, char **argv) {
 }
 
 void Cleanup(int signal) {
-  FlushStats();
+  //FlushStats();
   delete config;
   delete keyManager;
   for (auto i : threads) {
@@ -1236,6 +1252,7 @@ void Cleanup(int signal) {
 }
 
 void FlushStats() {
+  /*
   if (FLAGS_stats_file.size() > 0) {
     Stats total;
     for (unsigned int i = 0; i < benchClients.size(); i++) {
@@ -1251,4 +1268,5 @@ void FlushStats() {
     total.ExportJSON(FLAGS_stats_file);
     total.Output(FLAGS_exp_duration);
   }
+  */
 }
