@@ -1094,7 +1094,7 @@ void TCPTransport::DispatchTP_main(std::function<void*()> f) {
   tp.detatch_main(std::move(f));
 }
 void TCPTransport::IssueCB(std::function<void(void*)> cb, void* arg){
-  //std::lock_guard<std::mutex> lck(mtx);
+  //std::unique_lock<std::shared_mutex> lck(mtx);
   tp.issueCallback(std::move(cb), arg, libeventBase);
 }
 
@@ -1353,7 +1353,9 @@ TCPTransport::TCPReadableCallback_batch(struct bufferevent *bev, void *arg)
             break;
         }
 
-        UW_ASSERT(*magic == MAGIC);
+        if (*magic != MAGIC){
+            return;
+        }
 
         //szが指す領域がメッセージ
         size_t *sz;
@@ -1365,7 +1367,9 @@ TCPTransport::TCPReadableCallback_batch(struct bufferevent *bev, void *arg)
             break;
         }
         totalSize = *sz;
-        UW_ASSERT(totalSize < 1073741826);
+        if (totalSize >= 1073741826){
+            return;
+        }
 
         if (evbuffer_get_length(evbuf) < totalSize) {
             Debug("evbuffer_get_length(evbuf) : %d\n", evbuffer_get_length(evbuf));
@@ -1685,7 +1689,7 @@ TCPTransport::TCPOutgoingEventCallback(struct bufferevent *bev,
 
         return;
     } else if (what & BEV_EVENT_EOF) {
-        Warning("EOF on outgoing TCP connection to server");
+        //Warning("EOF on outgoing TCP connection to server");
         bufferevent_free(bev);
 
         transport->mtx.lock();
