@@ -231,17 +231,17 @@ void ShardClient::ReceiveMessage_batch(const TransportAddress &remote,
       //   HandlePhase1Reply(phase1Reply);
       // }
     } else if (typeArray[i] == phase2Reply.GetTypeName()) {
-      phase2Reply.ParseFromString(datas[0]);
+      for (int j = 0; j < batchSizeArray[i]; j++){
+        phase2Reply.ParseFromString(datas[j]);
+        if(!(params.validateProofs && params.signedMessages)){
+          HandlePhase2Reply(phase2Reply);
+        }
+        else{ //If validateProofs and signMessages are true, then use multi view
+          HandlePhase2Reply_MultiView(phase2Reply);
+        }
+      }
       const_cast<std::vector<std::string> *>(&datas)->erase(std::cbegin(datas), std::cbegin(datas) + batchSizeArray[i]);
-      //Use old handle Read only when proofs/signatures disabled
-      if(!(params.validateProofs && params.signedMessages)){
-        HandlePhase2Reply(phase2Reply);
-      }
-      else{ //If validateProofs and signMessages are true, then use multi view
-        HandlePhase2Reply_MultiView(phase2Reply);
-      }
-      //HandlePhase2Reply_MultiView(phase2Reply);
-      //HandlePhase2Reply(phase2Reply);
+      
     } else if (typeArray[i] == ping.GetTypeName()) {
       ping.ParseFromString(datas[0]);
       const_cast<std::vector<std::string> *>(&datas)->erase(std::cbegin(datas), std::cbegin(datas) + batchSizeArray[i]);
