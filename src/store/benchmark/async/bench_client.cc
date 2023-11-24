@@ -124,11 +124,11 @@ void BenchmarkClient::CooldownDone() {
   done = true;
 
   char buf[1024];
-  Notice("Finished cooldown period.");
+  Notice("Finished cooldown period of %d soconds", cooldownSec);
   std::sort(latencies.begin(), latencies.end());
 
 	Debug("crashing because latencies of size %d", latencies.size());
-
+  /*
 	if(latencies.size()>0){
 		uint64_t ns = latencies[latencies.size()/2];
 		LatencyFmtNS(ns, buf);
@@ -140,7 +140,8 @@ void BenchmarkClient::CooldownDone() {
 		}
 		ns = ns / latencies.size();
 		LatencyFmtNS(ns, buf);
-		Notice("Average latency is %ld ns (%s)", ns, buf);
+		Debug("Average latency is %ld ns (%s)", ns, buf);
+    Debug("The number of transaction is %d", latencies.size());
 
 		ns = latencies[latencies.size()*90/100];
 		LatencyFmtNS(ns, buf);
@@ -154,8 +155,9 @@ void BenchmarkClient::CooldownDone() {
 		LatencyFmtNS(ns, buf);
 		Debug("99th percentile latency is %ld ns (%s)", ns, buf);
 	}
+  */
 
-	curr_bdcb();
+	//curr_bdcb();
 }
 
 void BenchmarkClient::OnReply(int result) {
@@ -241,12 +243,12 @@ void BenchmarkClient::IncrementSent(int result) {
       struct timeval diff = timeval_sub(currTime, startTime);
       if (diff.tv_sec >= expDuration - cooldownSec && !cooldownStarted) {
         //diff.tv_sec() > expDuration(configで設定した時間) - cooldownSec()
-        Notice("Starting cooldown after %ld seconds.", diff.tv_sec);
-        Notice("expDuration : %ld", expDuration);
-        Notice("Cooldown time : %ld", cooldownSec);
+        Debug("Starting cooldown after %ld seconds.", diff.tv_sec);
+        Debug("expDuration : %ld", expDuration);
+        Debug("Cooldown time : %ld", cooldownSec);
         Finish();
       } else if (diff.tv_sec > expDuration) {
-        Notice("Finished cooldown after %ld seconds.", diff.tv_sec);
+        Debug("Finished cooldown after %ld seconds.", diff.tv_sec);
         CooldownDone();
       } else {
         Debug("Not done after %ld seconds.", diff.tv_sec);
@@ -270,7 +272,7 @@ void BenchmarkClient::IncrementSent_batch(std::vector<transaction_status_t> resu
       // TODO: use standard definitions across all clients for success/commit and failure/abort
       for(int i = 0; i < batchSize; i++){
         if (results[i] == 0) { // only record result if success
-          Debug("commit");
+          Debug("commit_num++");
           commit_num++;
           struct timespec curr;
           clock_gettime(CLOCK_MONOTONIC, &curr);
@@ -285,6 +287,7 @@ void BenchmarkClient::IncrementSent_batch(std::vector<transaction_status_t> resu
           latencies.push_back(ns);
         }
       }
+      n += commit_num;
     }
 
     if (numRequests == -1) {
@@ -309,20 +312,19 @@ void BenchmarkClient::IncrementSent_batch(std::vector<transaction_status_t> resu
     }
   }
 
-  n += commit_num;
 }
 
 void BenchmarkClient::Finish() {
   gettimeofday(&endTime, NULL);
 
-  Notice("endTime : %d, %d \n", endTime.tv_sec, endTime.tv_usec);
+  Debug("endTime : %d, %d \n", endTime.tv_sec, endTime.tv_usec);
 
   // endTime(Finishが呼ばれたタイミング)からstartMeasureTime()を引いている。
   struct timeval diff = timeval_sub(endTime, startMeasureTime);
 
-  Notice("#end:, %d, %d< %d \n", diff.tv_sec, diff.tv_usec, id);
+  Debug("#end:, %d, %d< %d \n", diff.tv_sec, diff.tv_usec, id);
 
-  Notice("Completed %d requests in " FMT_TIMEVAL_DIFF " seconds", n,
+  Debug("Completed %d requests in " FMT_TIMEVAL_DIFF " seconds", n,
       VA_TIMEVAL_DIFF(diff));
 
   double total_time, latency, throughput;
@@ -335,9 +337,9 @@ void BenchmarkClient::Finish() {
 
   throughput = n / total_time; 
 
-  Notice("Latency : %lf (second), %lf (millisecond), %lf (microsecond) \n", latency / 1000000, latency / 1000, latency);
+  Debug("Latency : %lf (second), %lf (millisecond), %lf (microsecond) \n", latency / 1000000, latency / 1000, latency);
 
-  Notice("Throughput : %lf (transaction/second) \n", throughput * 1000000); 
+  Debug("Throughput : %lf (transaction/second) \n", throughput * 1000000); 
 
   if (latencyFilename.size() > 0) {
       Latency_FlushTo(latencyFilename.c_str());
