@@ -859,8 +859,8 @@ void Client::Phase1TimeoutCallback(int group, uint64_t txnId, int status) {
   if (itr == this->pendingReqs.end()) {
     return;
   }
-  Debug("P1 TIMEOUT IS TRIGGERED for tx_id %d on group %d", txnId, group);
-  return;  //TODO:: REMOVE AND REPLACE
+
+  Warning("P1 TIMEOUT IS TRIGGERED for tx_id %d on group %d", txnId, group);
 
   PendingRequest *req = itr->second;
   if (req->startedPhase2 || req->startedWriteback) {
@@ -869,6 +869,8 @@ void Client::Phase1TimeoutCallback(int group, uint64_t txnId, int status) {
 
   Warning("PHASE1[%lu:%lu] group %d timed out.", client_id, txnId, group);
 
+  return;
+
   req->outstandingPhase1s = 0;
   if (params.validateProofs && params.signedMessages) {
     req->slowAbortGroup = -1;
@@ -876,7 +878,16 @@ void Client::Phase1TimeoutCallback(int group, uint64_t txnId, int status) {
     req->fast = true;
     req->decision = proto::COMMIT;
   }
-  Phase1(req);
+
+  if (params.batchOptimization){
+    std::vector<PendingRequest *> requests;
+    requests.push_back(req);
+    Phase1_batch(requests);
+  }
+  else{
+    Phase1(req);
+  }
+  
 
   //TODO:: alternatively upon timeout: just start Phase1FB for ones own TX:
   //Todo so: shard client needs to upcall with the respective reqId from shard client.. re-create the p1 message.
@@ -1099,7 +1110,7 @@ void Client::Phase2Callback(uint64_t txnId, int group, proto::CommitDecision dec
   req->decision = decision;
   req->decision_view = decision_view;
 
-  if (params.signatureBatch){
+  if (params.batchOptimization){
     Writeback_batch(req);
   }
   else{
@@ -1109,6 +1120,7 @@ void Client::Phase2Callback(uint64_t txnId, int group, proto::CommitDecision dec
 }
 
 void Client::Phase2TimeoutCallback(int group, uint64_t txnId, int status) {
+  Debug("Client::Phase2TimeoutCallback");
   auto itr = this->pendingReqs.find(txnId);
   if (itr == this->pendingReqs.end()) {
     return;
@@ -1121,6 +1133,8 @@ void Client::Phase2TimeoutCallback(int group, uint64_t txnId, int status) {
 
   Warning("PHASE2[%lu:%lu] group %d timed out.", client_id, txnId, group);
   Panic("P2 timing out for txnId: %lu; honest client: %s", txnId, failureActive ? "False" : "True");
+
+  return;
 
   Phase2(req);
 }
@@ -1178,7 +1192,6 @@ void Client::Writeback(PendingRequest *req) {
       result = ABORTED_SYSTEM;
       Debug("WRITEBACK[%lu:%lu][%s] ABORT.", client_id, req->id,
           BytesToHex(req->txnDigest, 16).c_str());
-      abort_tx_nums.push_back(req->id);
       break;
     }
     default: {
@@ -1286,6 +1299,7 @@ void Client::Writeback_batch(PendingRequest *req) {
       result = ABORTED_USER;
     }
     else if(!failureEnabled && result == COMMITTED){
+      Debug("total_commit_honest");
       stats.Increment("total_commit_honest", 1);
     }
     if(failureEnabled && result == ABORTED_SYSTEM){ //--> breaks overall tput???
