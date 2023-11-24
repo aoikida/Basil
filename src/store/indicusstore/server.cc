@@ -1755,19 +1755,19 @@ void Server::HandlePhase1CB_batch_multi(std::vector<proto::Phase1> &msgs, std::v
     Debug("HandlePhase1CB_batch : req_id : %d\n", reqIds[i]);
   }
 
-  for(int i = 0; i < results.size(); i++){
-    if (results[i] == proto::ConcurrencyControl::WAIT || replicaGossip){
+
+  for(int i = 0; i < batchSize; i++){
+    if (results[i - wait_tx] == proto::ConcurrencyControl::WAIT || replicaGossip){
       Debug("results[i] == proto::ConcurrencyControl::WAIT || replicaGossip");
       results.erase(results.begin() + i - wait_tx);
       committedProofs.erase(committedProofs.begin() + i - wait_tx);
       txnDigests.erase(txnDigests.begin() + i - wait_tx);
       reqIds.erase(reqIds.begin() + i - wait_tx);
-      batchSize--;
       wait_tx++;
     }
   }
 
-  if (batchSize == 0){
+  if (results.size() == 0){
     Debug("if");
   }
   else {
