@@ -1350,11 +1350,21 @@ TCPTransport::TCPReadableCallback_batch(struct bufferevent *bev, void *arg)
         magic = (uint32_t *)evbuffer_pullup(evbuf, sizeof(*magic));
         if (magic == NULL) {
             Debug("magic == NULL");
-            break;
+            if (first_loop == true){
+                return;
+            }
+            else {
+                break;
+            }
         }
 
         if (*magic != MAGIC){
-            return;
+            if (first_loop == true){
+                return;
+            }
+            else {
+                break;
+            }
         }
 
         //szが指す領域がメッセージ
@@ -1364,11 +1374,21 @@ TCPTransport::TCPReadableCallback_batch(struct bufferevent *bev, void *arg)
         sz = (size_t *) (x + sizeof(*magic));
         if (x == NULL) {
             Debug("x == NULL");
-            break;
+            if (first_loop == true){
+                return;
+            }
+            else {
+                break;
+            }
         }
         totalSize = *sz;
         if (totalSize >= 1073741826){
-            return;
+            if (first_loop == true){
+                return;
+            }
+            else {
+                break;
+            }
         }
 
         if (evbuffer_get_length(evbuf) < totalSize) {
