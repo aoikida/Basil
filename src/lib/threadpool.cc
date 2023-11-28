@@ -45,7 +45,7 @@ void ThreadPool::start(int process_id, int total_processes, bool hyperthreading,
     //TODO: add config param for hyperthreading
     //bool hyperthreading = true;
     // サーバのCPUの数をここに記載する
-    int num_cpus = 4;//std::thread::hardware_concurrency(); ///(2-hyperthreading);
+    int num_cpus = std::thread::hardware_concurrency(); ///(2-hyperthreading);
     fprintf(stderr, "Num_cpus: %d \n", num_cpus);
     num_cpus /= total_processes;
     int offset = process_id * num_cpus;
