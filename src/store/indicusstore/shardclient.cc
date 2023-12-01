@@ -1423,7 +1423,7 @@ void ShardClient::HandleReadReply_batch(const std::vector<proto::ReadReply> &rep
     Debug("reply.req_id :%d", replies[i].req_id());
     if (itr == this->pendingGets.end()) {
       Debug("itr == this->pendingGets.end()");
-      break; // this is a stale request
+      continue; // this is a stale request
     }
     PendingQuorumGet *req = itr->second;
     Debug("[group %i] ReadReply for %lu.", group, replies[i].req_id());
