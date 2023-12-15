@@ -1216,7 +1216,7 @@ int main(int argc, char **argv) {
 
   LatencyFmtNS(ns, buf);
   Notice("latency is %ld ns (%s)", ns, buf);
-  Notice("throughput is %d", latencySize / FLAGS_exp_duration);
+  Notice("throughput is %f", (double)latencySize / (double)FLAGS_exp_duration);
 
   Cleanup(0);
 
