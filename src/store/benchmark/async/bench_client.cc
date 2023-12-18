@@ -216,7 +216,7 @@ void BenchmarkClient::StartLatency() {
 
 void BenchmarkClient::IncrementSent(int result) {
   if (started) {
-    Notice("IncrementSent is called \n");
+    Debug"IncrementSent is called \n");
     // record latency
     if (!cooldownStarted) {
       uint64_t ns = Latency_End(&latency);
