@@ -11,7 +11,7 @@ NUM_OPS_TX=10
 NUM_KEYS_IN_DB=100000
 KEY_PATH="/usr/local/etc/indicus-keys/donna"
 BATCH_SIZE=2
-REPLICA_ID=0
+REPLICA_ID=5
 GROUP_ID=0
 
 
