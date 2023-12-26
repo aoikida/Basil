@@ -473,7 +473,7 @@ void Client::Get_batch(const std::vector<std::string>& key_list, std::vector<get
     read_timeout_callback_batch rtcb = gtcb;
     
     // Send the GET operation to appropriate shard.
-    bclient[id]->Get_batch(client_seq_num, key_list, timestamp_list, readMessages,
+    bclient[id]->Get_batch_optimization(client_seq_num, key_list, timestamp_list, readMessages,
         readQuorumSize, params.readDepSize, rcb_list, rtcb, timeout);
   });
 }
