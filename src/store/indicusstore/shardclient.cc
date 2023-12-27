@@ -463,11 +463,14 @@ void ShardClient::Get_batch_optimization(uint64_t id, const std::vector<std::str
 
   UW_ASSERT(readMessages <= closestReplicas.size());
 
-  //これでレプリカに対して、readのrequestを送信している。
-  for (size_t i = 0; i < readMessages; ++i) {
-    Debug("[group %i] Sending GET to replica %lu", group, GetNthClosestReplica(i));
-    transport->SendMessageToReplica_batch(this, group, GetNthClosestReplica(i), read_batch);
+  if (remainder != 0){
+    //これでレプリカに対して、readのrequestを送信している。
+    for (size_t i = 0; i < readMessages; ++i) {
+      Debug("[group %i] Sending GET to replica %lu", group, GetNthClosestReplica(i));
+      transport->SendMessageToReplica_batch(this, group, GetNthClosestReplica(i), read_batch);
+    }
   }
+  
 }
 
 
