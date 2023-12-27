@@ -393,9 +393,20 @@ void ShardClient::Get_batch_optimization(uint64_t id, const std::vector<std::str
 
   int readBatchSize = 64;
 
-  int loop = numRead / readBatchSize;
-  int remainder = numRead % readBatchSize;
+  int loop;
+  int remainder;
+
   uint64_t reqId;
+
+  if (numRead >= readBatchSize){
+    loop = numRead / readBatchSize;
+    remainder = numRead % readBatchSize;
+  }
+  else {
+    loop = 0;
+    remainder = numRead;
+  }
+  
 
   for (int i = 0; i < loop; i++){
     read_batch.clear();
