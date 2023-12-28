@@ -50,10 +50,6 @@ Operation YCSBTransaction::GetNextOperation_ycsb(size_t outstandingOpCount, size
     if(finishedOpCount != outstandingOpCount){
       return Wait();
     }
-    else if (readOnly || outstandingOpCount % 2 == 0) {
-      //std::cerr << "read: " << GetKey(finishedOpCount) << std::endl;
-      return Get(GetKey(finishedOpCount));
-    } 
     else if ((rnd.next() % 100) < readRatio) {
       std::string key = keySelector->GetKey(zipf() % numKeys);
       return Get(key);
