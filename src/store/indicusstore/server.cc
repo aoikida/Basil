@@ -502,8 +502,6 @@ void Server::ReceiveMessageInternal_batch(const TransportAddress &remote,
 
   int batchSize = datas.size();
 
-  std::string data = datas[0];
-
   std::vector<int> batchSizeArray;
   std::vector<std::string> typeArray;
 
@@ -530,18 +528,8 @@ void Server::ReceiveMessageInternal_batch(const TransportAddress &remote,
   }
 
   Debug("BatchSize : %d \n", batchSize);
-
   Debug("batchSizeArray.size(): %d \n", batchSizeArray.size());
-
-  for (int i = 0; i < batchSizeArray.size(); i++){
-    Debug("batchSize : %d \n", batchSizeArray[i]);
-  }
-
   Debug("typeArray.size(): %d \n", typeArray.size());
-
-  for (int i = 0; i < typeArray.size(); i++){
-    Debug("type : %s \n", typeArray[i].c_str());
-  }
 
   for(int i = 0; i < batchSizeArray.size(); i++){
     Debug("type : %s \n", typeArray[i].c_str());
@@ -695,24 +683,24 @@ void Server::ReceiveMessageInternal_batch(const TransportAddress &remote,
       */
     }
     else if (typeArray[i] == abort.GetTypeName()) {
-      abort.ParseFromString(data);
+      abort.ParseFromString(datas[0]);
       HandleAbort(remote, abort);
     } 
     else if (typeArray[i] == ping.GetTypeName()) {
-      ping.ParseFromString(data);
+      ping.ParseFromString(datas[0]);
       Debug("Ping is called");
       HandlePingMessage(this, remote, ping);
     // Add all Fallback signedMessages
     }
     else if (typeArray[i] == phase1FB.GetTypeName()) {
       if(!params.mainThreadDispatching || (params.dispatchMessageReceive && !params.parallel_CCC)){
-        phase1FB.ParseFromString(data);
+        phase1FB.ParseFromString(datas[0]);
         const_cast<std::vector<std::string> *>(&datas)->erase(std::cbegin(datas), std::cbegin(datas) + batchSizeArray[i]);
         HandlePhase1FB(remote, phase1FB);
       }
       else{
         proto::Phase1FB *phase1FBCopy = GetUnusedPhase1FBmessage();
-        phase1FBCopy->ParseFromString(data);
+        phase1FBCopy->ParseFromString(datas[0]);
         const_cast<std::vector<std::string> *>(&datas)->erase(std::cbegin(datas), std::cbegin(datas) + batchSizeArray[i]);
         auto f = [this, &remote, phase1FBCopy]() {
           this->HandlePhase1FB(remote, *phase1FBCopy);
@@ -731,12 +719,12 @@ void Server::ReceiveMessageInternal_batch(const TransportAddress &remote,
     else if (typeArray[i] == phase2FB.GetTypeName()) {
 
       if(!params.multiThreading && (!params.mainThreadDispatching || params.dispatchMessageReceive)){
-        phase2FB.ParseFromString(data);
+        phase2FB.ParseFromString(datas[0]);
         HandlePhase2FB(remote, phase2FB);
       }
       else{
         proto::Phase2FB* p2FB = GetUnusedPhase2FBmessage();
-        p2FB->ParseFromString(data);
+        p2FB->ParseFromString(datas[0]);
         if(!params.mainThreadDispatching || params.dispatchMessageReceive){
           HandlePhase2FB(remote, *p2FB);
         }
@@ -753,12 +741,12 @@ void Server::ReceiveMessageInternal_batch(const TransportAddress &remote,
     else if (typeArray[i] == invokeFB.GetTypeName()) {
 
       if((params.all_to_all_fb || !params.multiThreading) && (!params.mainThreadDispatching || params.dispatchMessageReceive)){
-        invokeFB.ParseFromString(data);
+        invokeFB.ParseFromString(datas[0]);
         HandleInvokeFB(remote, invokeFB);
       }
       else{
         proto::InvokeFB* invFB = GetUnusedInvokeFBmessage();
-        invFB->ParseFromString(data);
+        invFB->ParseFromString(datas[0]);
         if(!params.mainThreadDispatching || params.dispatchMessageReceive){
           HandleInvokeFB(remote, *invFB);
         }
@@ -775,12 +763,12 @@ void Server::ReceiveMessageInternal_batch(const TransportAddress &remote,
     else if (typeArray[i] == electFB.GetTypeName()) {
 
       if(!params.mainThreadDispatching || params.dispatchMessageReceive){
-        electFB.ParseFromString(data);
+        electFB.ParseFromString(datas[0]);
         HandleElectFB(electFB);
       }
       else{
         proto::ElectFB* elFB = GetUnusedElectFBmessage();
-        elFB->ParseFromString(data);
+        elFB->ParseFromString(datas[0]);
         auto f = [this, elFB](){
           this->HandleElectFB(*elFB);
           return (void*) true;
@@ -791,12 +779,12 @@ void Server::ReceiveMessageInternal_batch(const TransportAddress &remote,
     else if (typeArray[i] == decisionFB.GetTypeName()) {
 
       if(!params.multiThreading && (!params.mainThreadDispatching || params.dispatchMessageReceive)){
-        decisionFB.ParseFromString(data);
+        decisionFB.ParseFromString(datas[0]);
         HandleDecisionFB(decisionFB);
       }
       else{
         proto::DecisionFB* decFB = GetUnusedDecisionFBmessage();
-        decFB->ParseFromString(data);
+        decFB->ParseFromString(datas[0]);
         if(!params.mainThreadDispatching || params.dispatchMessageReceive){
           HandleDecisionFB(*decFB);
         }
@@ -812,12 +800,12 @@ void Server::ReceiveMessageInternal_batch(const TransportAddress &remote,
     else if (typeArray[i] == moveView.GetTypeName()) {
 
       if(!params.mainThreadDispatching || params.dispatchMessageReceive){
-        moveView.ParseFromString(data);
+        moveView.ParseFromString(datas[0]);
         HandleMoveView(moveView); //Send only to other replicas
       }
       else{
         proto::MoveView* mvView = GetUnusedMoveView();
-        mvView->ParseFromString(data);
+        mvView->ParseFromString(datas[0]);
         auto f = [this, mvView](){
           this->HandleMoveView( *mvView);
           return (void*) true;
@@ -1669,9 +1657,11 @@ void Server::HandlePhase1_batch(const TransportAddress &remote,
             //c->second.P1meta_mutex.unlock();
             //std::cerr << "[Normal] release lock for txn: " << BytesToHex(txnDigest, 64) << std::endl;
           }
+          /*
           for (int i = 0; i < batch_size; i++){
             Debug("HandlePhase1_batch : req_id():%d",msgs_copy[i].req_id());
           }
+          */
           HandlePhase1CB_batch_multi(msgs_copy, results, committedProofs, txnDigests, *remote_ptr, abstain_conflict, replicaGossip);
 
           return (void*) true;
