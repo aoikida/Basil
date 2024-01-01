@@ -138,7 +138,7 @@ DEFINE_bool(ping_replicas, false, "determine latency to replicas via pings");
 DEFINE_bool(tapir_sync_commit, true, "wait until commit phase completes before"
     " sending additional transactions (for TAPIR)");
 //追加
-DEFINE_bool(batch_optimization, true, "if true batch optimization, else if false no conventional.");
+DEFINE_bool(batch_optimization, false, "if true batch optimization, else if false no conventional.");
 DEFINE_bool(signature_batch, false, "if true signature_batch, else if false no conventional.");
 
 //rw setting

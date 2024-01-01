@@ -82,7 +82,7 @@ DEFINE_uint64(num_groups, 1, "number of replica groups in the system");
 DEFINE_uint64(num_shards, 1, "number of shards in the system");
 DEFINE_bool(debug_stats, true, "record stats related to debugging");
 DEFINE_uint64(num_ops, 1, "number of keys to generate");
-DEFINE_bool(batch_optimization, true, "if true batch optimization, false no batch optimization");
+DEFINE_bool(batch_optimization, false, "if true batch optimization, false no batch optimization");
 DEFINE_bool(signature_batch, false, "if true signature_batch, else if false no conventional.");
 
 DEFINE_bool(rw_or_retwis, true, "true for rw, false for retwis");
