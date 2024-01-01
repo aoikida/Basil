@@ -72,11 +72,7 @@ Operation YCSBTransaction::GetNextOperation_batch(size_t outstandingOpCount, siz
 
   if (outstandingOpCount < GetNumOps() * batchSize) {
     Debug("outstanding: %d, finished: %d, num ops: %d, batchSize: %d \n", outstandingOpCount, finishedOpCount, GetNumOps(), batchSize);
-    if(finishedOpCount != outstandingOpCount){
-      Debug("wait\n");
-      return Wait();
-    }
-    else if ((rnd.next() % 100) < readRatio) {
+    if ((rnd.next() % 100) < readRatio) {
       std::string key = keySelector->GetKey(zipf() % numKeys);
       Debug("read: %d\n", key);
       return Get(key);
@@ -92,7 +88,6 @@ Operation YCSBTransaction::GetNextOperation_batch(size_t outstandingOpCount, siz
   else {
     Debug("outstandingOpCount :%d", outstandingOpCount);
     std::cerr << "unnecessary transaction is made" << std::endl;
-    exit(1);
   }
 }
 
