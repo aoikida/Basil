@@ -132,8 +132,6 @@ void ShardClient::ReceiveMessage_batch(const TransportAddress &remote,
   Debug("ShardClient::ReceiveMessage_batch");
   int batchSize = datas.size();
 
-  const std::string data = datas[0];
-
   std::vector<int> batchSizeArray;
   std::vector<std::string> typeArray;
 
@@ -162,15 +160,6 @@ void ShardClient::ReceiveMessage_batch(const TransportAddress &remote,
   Debug("batchSize: %d\n",batchSize);
 
   Debug("batchSizeArray.size(): %d\n", batchSizeArray.size());
-
-  for (int i = 0; i < batchSizeArray.size(); i++){
-    Debug("batchSize : %d\n",batchSizeArray[i]);
-  }
-
-  Debug("typeArray.size(): %d\n",typeArray.size());
-  for (int i = 0; i < typeArray.size(); i++){
-    Debug("type : %s\n",typeArray[i].c_str());
-  }
 
   for(int i = 0; i < batchSizeArray.size(); i++){
     Debug("type : %s\n",typeArray[i].c_str());
@@ -303,11 +292,6 @@ void ShardClient::Get(uint64_t id, const std::string &key,
     uint64_t rds, read_callback gcb, read_timeout_callback gtc,
     uint32_t timeout) {
 
-  if (BufferGet(key, gcb)) {
-    Debug("[group %i] read from buffer.", group);
-    return;
-  }
-
   uint64_t reqId = lastReqId++;
   PendingQuorumGet *pendingGet = new PendingQuorumGet(reqId);
   pendingGets[reqId] = pendingGet;
@@ -337,14 +321,6 @@ void ShardClient::Get_batch(uint64_t id, const std::vector<std::string> &key_lis
     const std::vector<TimestampMessage> &ts_list, uint64_t readMessages, uint64_t rqs,
     uint64_t rds, std::vector<read_callback> &rcb_list, read_timeout_callback_batch gtcb,
     uint32_t timeout) {  //readMessages : 何個のレプリカにメッセージを送るのか？
-
-  // ここは通っていなそうなので、今のところ無視して良さそう
-  /*
-  if (BufferGet(key, gcb)) {
-    Debug("[group %i] read from buffer.", group);
-    return;
-  }
-  */
 
   read_batch.clear();
   int numRead = key_list.size();
@@ -379,9 +355,11 @@ void ShardClient::Get_batch(uint64_t id, const std::vector<std::string> &key_lis
     transport->SendMessageToReplica_batch(this, group, GetNthClosestReplica(i), read_batch);
   }
 
+  /*
   for(int i = 0; i < numRead; i++){
     Debug("[group %i] Sent GET [%lu : %lu]", group, id, lastReqId - numRead + i);
   }
+  */
 }
 
 void ShardClient::Get_batch_optimization(uint64_t id, const std::vector<std::string> &key_list,
