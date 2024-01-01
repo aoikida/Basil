@@ -10,7 +10,7 @@ STORE=PROTOCOL+"store" #store = "indicusstore"
 DURATION=30 #実行時間は10秒
 ZIPF=0.0 #skew= 0
 NUM_OPS_TX=10 #トランザクション内のオペレーション数
-NUM_KEYS_IN_DB=1000000 #データベース内のレコードの数
+NUM_KEYS_IN_DB=100000 #データベース内のレコードの数
 KEY_PATH="/usr/local/etc/indicus-keys/donna" #keyのパス
 BENCHMARK="ycsb" #rwとretwis以外使用できない #smallbankとtpcc-syncは同期環境を想定しているので工夫が必要かも
 BATCH_SIZE=1
