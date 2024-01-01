@@ -133,7 +133,6 @@ void AsyncAdapterClient::MakeTransaction(uint64_t txNum, uint64_t txSize, uint64
       Operation op = tx[op_num];
       switch (op.type) {
         case GET: {
-          readValues.insert(std::make_pair(op.key, ""));
           pre_read_set.push_back(op);
           //このwriteによって、同一バッチ内でconflictが発生するか否かを検証。
           //発生する場合、このreadを含むトランザクションは次回のバッチに回し、このトランザクションを除いたバッチを作成する。
@@ -197,7 +196,6 @@ void AsyncAdapterClient::MakeTransaction(uint64_t txNum, uint64_t txSize, uint64
           readValues, batchSize, rnd, zipf);
       switch (op.type) {
         case GET: {
-          readValues.insert(std::make_pair(op.key, ""));
           pre_read_set.push_back(op);
           //このwriteによって、同一バッチ内でconflictが発生するか否かを検証。
           //発生する場合、このreadを含むトランザクションは次回のバッチに回し、このトランザクションを除いたバッチを作成する。
@@ -278,6 +276,7 @@ void AsyncAdapterClient::ExecuteWriteOperation(int tx_num, std::vector<Operation
 void AsyncAdapterClient::ExecuteReadOperation(){
   
   key_list.clear();
+  gcb_list.clear();
 
   for(auto itr = read_set.begin(); itr != read_set.end(); ++itr){
     gcb_list.push_back(std::bind(&AsyncAdapterClient::GetCallback_batch, this,
