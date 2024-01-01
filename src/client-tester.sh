@@ -4,7 +4,7 @@ CLIENTS=1 #クライアントプロセスの数
 CLIENT_THREAD=12 #クライアントの中のスレッドの数
 F=0 #Fault nodeの数??
 NUM_GROUPS=1 #シャードの数
-CONFIG="shard-r0.config" #設定ファイルは"shard-r1.config"
+CONFIG="shard-r6.config" #設定ファイルは"shard-r1.config"
 PROTOCOL="indicus" #プロトコルは"indicus(Basilのこと)""
 STORE=PROTOCOL+"store" #store = "indicusstore"
 DURATION=30 #実行時間は10秒
