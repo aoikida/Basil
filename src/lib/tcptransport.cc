@@ -745,18 +745,20 @@ bool
 TCPTransport::SendMessageInternal_batch(TransportReceiver *src,
                                   const TCPTransportAddress &dst,
                                   const std::vector<Message *> &m_list)
-{  // vectorで二重配列にした場合、内側の配列のアドレスが連続しないので、配列を二重にする。
+{  
     Debug("SendMessageInternal_batch start\n");
 
     int message_size = m_list.size();
 
     Debug("message_size : %d", message_size);
 
+    /*
     for (int i = 0; i < message_size; i++){
         Debug("Sending %s message over TCP to %s:%d \n",
         (*m_list[i]).GetTypeName().c_str(), inet_ntoa(dst.addr.sin_addr),
         htons(dst.addr.sin_port));
     }
+    */
 
     auto dstSrc = std::make_pair(dst, src);
     mtx.lock();
@@ -801,13 +803,6 @@ TCPTransport::SendMessageInternal_batch(TransportReceiver *src,
 
     //buf_batchの雛形を作成
     char buf_batch[message_size][maxTotalLen];
-
-    //buf_batchの初期化
-    for (int i = 0; i < message_size; i++){
-        for (int j = 0; j < maxTotalLen; j++){
-            buf_batch[i][j] = ' ';
-        }
-    }
 
     for(int i = 0; i < message_size; ++i){
         string data;
