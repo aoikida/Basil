@@ -1,19 +1,19 @@
 #!/bin/bash
 
 CLIENTS=1 #クライアントプロセスの数 
-CLIENT_THREAD=2 #クライアントの中のスレッドの数
+CLIENT_THREAD=12 #クライアントの中のスレッドの数
 F=0 #Fault nodeの数??
 NUM_GROUPS=1 #シャードの数
 CONFIG="shard-r0.config" #設定ファイルは"shard-r1.config"
 PROTOCOL="indicus" #プロトコルは"indicus(Basilのこと)""
 STORE=PROTOCOL+"store" #store = "indicusstore"
-DURATION=10 #実行時間は10秒
-ZIPF=0.99 #skew= 0
+DURATION=30 #実行時間は10秒
+ZIPF=0.0 #skew= 0
 NUM_OPS_TX=10 #トランザクション内のオペレーション数
 NUM_KEYS_IN_DB=1000000 #データベース内のレコードの数
 KEY_PATH="/usr/local/etc/indicus-keys/donna" #keyのパス
 BENCHMARK="ycsb" #rwとretwis以外使用できない #smallbankとtpcc-syncは同期環境を想定しているので工夫が必要かも
-BATCH_SIZE=32
+BATCH_SIZE=1
 
 
 
