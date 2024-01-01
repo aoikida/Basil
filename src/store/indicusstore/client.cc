@@ -379,11 +379,13 @@ void Client::Get_batch(const std::vector<std::string>& key_list, std::vector<get
 
     int numRead = key_list.size();
     // Latency_Start(&getLatency);
+    /*
     for(int i = 0; i < numRead; i++){
       auto itr = (*keyTxMap).find(key_list[i]);
       Debug("GET_BATCH : GET[%lu:%lu] for key %s", client_id, client_seq_num + itr->second,
         BytesToHex(key_list[i], 16).c_str());
     }
+    */
 
     // Contact the appropriate shard to get the value.
     std::vector<int> txnGroups(txnBatch[0].involved_groups().begin(), txnBatch[0].involved_groups().end());
@@ -711,7 +713,6 @@ void Client::Phase1_batch(std::vector<PendingRequest *>& requests) {
     }
   }
 
-  //この下は要改善
   //schedule timeout for when we allow starting FB P1.
   for (int i = 0; i < requests.size(); i++){
     transport->Timer(params.relayP1_timeout, [this, reqId = requests[i]->id](){RelayP1TimeoutCallback(reqId);});
