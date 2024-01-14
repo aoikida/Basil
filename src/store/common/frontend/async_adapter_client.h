@@ -61,6 +61,7 @@ class AsyncAdapterClient : public AsyncClient {
 
   //追加
   void MakeTransaction(uint64_t txNum, uint64_t txSize, uint64_t batchSize, Xoroshiro128Plus &rnd, FastZipf &zipf, std::vector<int> abort_tx_nums);
+  void MakeTransaction_old(uint64_t txNum, uint64_t txSize, uint64_t batchSize, Xoroshiro128Plus &rnd, FastZipf &zipf, std::vector<int> abort_tx_nums);
   void ExecuteWriteOperation(int batch_num, std::vector<Operation> write_set);
   void ExecuteReadOperation();
   void ExecuteCommit();
