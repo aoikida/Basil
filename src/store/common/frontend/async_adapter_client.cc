@@ -67,8 +67,130 @@ void AsyncAdapterClient::Execute_batch(AsyncTransaction *txn,
   currTxn = txn;
   readValues.clear();
   client->Begin_batch([this](uint64_t txNum, uint64_t txSize, uint64_t batchSize, Xoroshiro128Plus &rnd, FastZipf &zipf, std::vector<int> abort_tx_nums) {
-    MakeTransaction(txNum, txSize, batchSize, rnd, zipf, abort_tx_nums);
+    MakeTransaction_new(txNum, txSize, batchSize, rnd, zipf, abort_tx_nums);
   }, []{}, timeout, retry);
+}
+
+void AsyncAdapterClient::MakeTransaction_new(uint64_t txNum, uint64_t txSize, uint64_t batchSize, Xoroshiro128Plus &rnd, FastZipf &zipf, std::vector<int> abort_tx_nums){
+
+  int tx_num = 0;
+  int thisTxWrite = 0;
+  int outstandingOpCount_for_batch = 0UL;
+  int finishedOpCount_for_batch = 0UL;
+
+  //旋回のバッチで使用した変数を初期化
+  transaction.clear();
+  keyTxMap.clear(); //get_batchにおいて、keyからtxのidを割り出すために使用
+  read_set.clear(); 
+  readOpNum = 0;
+  write_set.clear();
+  writeOpNum = 0;
+  commitTxNum = 0;
+  
+  //前回のバッチでabortになったトランザクションをバッチに含む。
+  for(auto itr = abort_tx_nums.begin(); itr != abort_tx_nums.end(); ++itr){
+    Debug("abort transaction in previous batch\n");
+    Debug("abort_tx_nums_size : %d\n", abort_tx_nums.size());
+    Debug("abort_tx_no, %d\n", *itr);
+    std::vector<Operation> tx = batch.at(*itr);
+    batch.erase(*itr);
+    for (int op_num = 0; op_num < txSize; op_num++){
+      Operation op = tx[op_num];
+      switch (op.type) {
+        case GET: {
+          pre_read_set.push_back(op);
+          break;
+        }
+        case PUT: {
+          pre_write_set.push_back(op);
+          break;
+        }
+      }
+      outstandingOpCount_for_batch++;
+      finishedOpCount_for_batch++;
+    }
+    
+    Debug("%d : transaction finish\n", tx_num);
+    for(auto itr = pre_read_set.begin(); itr != pre_read_set.end(); ++itr){
+      readValues.insert(std::make_pair((*itr).key, ""));
+      read_set.push_back(*itr);
+      transaction.push_back(*itr);
+      keyTxMap.insert(std::make_pair((*itr).key, tx_num));
+      readOpNum++;
+    }
+    for(auto itr = pre_write_set.begin(); itr != pre_write_set.end(); ++itr){
+      write_set.push_back(*itr);
+      transaction.push_back(*itr);
+      keyTxMap.insert(std::make_pair((*itr).key, tx_num));
+      writeOpNum++;
+      thisTxWrite++;
+    }
+
+    if (thisTxWrite != 0){
+      ExecuteWriteOperation(tx_num, pre_write_set);
+      thisTxWrite == 0;
+    }
+
+    pre_write_set.clear();
+    pre_read_set.clear();
+    batch.insert(std::make_pair(txNum + tx_num, transaction));
+    transaction.clear();
+    tx_num++;
+    commitTxNum++;
+  }
+
+  //通常のトランザクションを生成する部分
+  while(tx_num < batchSize){
+    Debug("tx_num: %d\n", tx_num);
+    for (int op_num = 0; op_num < txSize; op_num++){
+      Operation op = currTxn->GetNextOperation_batch(outstandingOpCount_for_batch, finishedOpCount_for_batch,
+          readValues, batchSize, rnd, zipf);
+      switch (op.type) {
+        case GET: {
+          pre_read_set.push_back(op);
+          break;
+        }
+        case PUT: {
+          pre_write_set.push_back(op);
+          break;
+        }
+      }
+      outstandingOpCount_for_batch++;
+      finishedOpCount_for_batch++;
+    }
+
+    Debug("%d : transaction finish\n", tx_num);
+    for(auto itr = pre_read_set.begin(); itr != pre_read_set.end(); ++itr){
+      readValues.insert(std::make_pair((*itr).key, ""));
+      read_set.push_back(*itr);
+      transaction.push_back(*itr);
+      keyTxMap.insert(std::make_pair((*itr).key, tx_num));
+      readOpNum++;
+    }
+    for(auto itr = pre_write_set.begin(); itr != pre_write_set.end(); ++itr){
+      write_set.push_back(*itr);
+      transaction.push_back(*itr);
+      keyTxMap.insert(std::make_pair((*itr).key, tx_num));
+      writeOpNum++;
+      thisTxWrite++;
+    }
+
+    if (thisTxWrite != 0){
+      ExecuteWriteOperation(tx_num, pre_write_set);
+      thisTxWrite == 0;
+    }
+
+    pre_write_set.clear();
+    pre_read_set.clear();
+    batch.insert(std::make_pair(txNum + tx_num, transaction));
+    transaction.clear();
+    tx_num++;
+    commitTxNum++;
+  }
+
+  if (writeOpNum == 0){
+    ExecuteReadOperation();
+  }
 }
 
 void AsyncAdapterClient::MakeTransaction(uint64_t txNum, uint64_t txSize, uint64_t batchSize, Xoroshiro128Plus &rnd, FastZipf &zipf, std::vector<int> abort_tx_nums){
