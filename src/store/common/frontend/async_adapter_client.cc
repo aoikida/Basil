@@ -67,7 +67,7 @@ void AsyncAdapterClient::Execute_batch(AsyncTransaction *txn,
   currTxn = txn;
   readValues.clear();
   client->Begin_batch([this](uint64_t txNum, uint64_t txSize, uint64_t batchSize, Xoroshiro128Plus &rnd, FastZipf &zipf, std::vector<int> abort_tx_nums) {
-    MakeTransaction_new(txNum, txSize, batchSize, rnd, zipf, abort_tx_nums);
+    MakeTransaction(txNum, txSize, batchSize, rnd, zipf, abort_tx_nums);
   }, []{}, timeout, retry);
 }
 
