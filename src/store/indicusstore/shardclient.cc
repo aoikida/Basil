@@ -292,6 +292,11 @@ void ShardClient::Get(uint64_t id, const std::string &key,
     uint64_t rds, read_callback gcb, read_timeout_callback gtc,
     uint32_t timeout) {
 
+  if (BufferGet(key, gcb)) {
+    Debug("[group %i] read from buffer.", group);
+    return;
+  }
+
   uint64_t reqId = lastReqId++;
   PendingQuorumGet *pendingGet = new PendingQuorumGet(reqId);
   pendingGets[reqId] = pendingGet;
@@ -328,6 +333,10 @@ void ShardClient::Get_batch(uint64_t id, const std::vector<std::string> &key_lis
   //pendingGetにデータアイテムを追加しているが、pendingGetはどこで使用されるのか？？
   //とりあえずこの部分は、ループで回したらバッチに対応できそう。
   for(int i = 0; i < numRead; i++){
+    if (BufferGet(key_list[i], rcb_list[i])) {
+    Debug("[group %i] read from buffer.", group);
+    return;
+  }
     uint64_t reqId = lastReqId++;
     Debug("reqId : %d", reqId);
     PendingQuorumGet *pendingGet = new PendingQuorumGet(reqId);
