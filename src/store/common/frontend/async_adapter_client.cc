@@ -67,11 +67,11 @@ void AsyncAdapterClient::Execute_batch(AsyncTransaction *txn,
   currTxn = txn;
   readValues.clear();
   client->Begin_batch([this](uint64_t txNum, uint64_t txSize, uint64_t batchSize, Xoroshiro128Plus &rnd, FastZipf &zipf, std::vector<int> abort_tx_nums) {
-    MakeTransaction(txNum, txSize, batchSize, rnd, zipf, abort_tx_nums);
+    MakeTransaction_single_abort(txNum, txSize, batchSize, rnd, zipf, abort_tx_nums);
   }, []{}, timeout, retry);
 }
 
-void AsyncAdapterClient::MakeTransaction_new(uint64_t txNum, uint64_t txSize, uint64_t batchSize, Xoroshiro128Plus &rnd, FastZipf &zipf, std::vector<int> abort_tx_nums){
+void AsyncAdapterClient::MakeTransaction_no_abort(uint64_t txNum, uint64_t txSize, uint64_t batchSize, Xoroshiro128Plus &rnd, FastZipf &zipf, std::vector<int> abort_tx_nums){
 
   int tx_num = 0;
   int thisTxWrite = 0;
@@ -193,7 +193,7 @@ void AsyncAdapterClient::MakeTransaction_new(uint64_t txNum, uint64_t txSize, ui
   }
 }
 
-void AsyncAdapterClient::MakeTransaction(uint64_t txNum, uint64_t txSize, uint64_t batchSize, Xoroshiro128Plus &rnd, FastZipf &zipf, std::vector<int> abort_tx_nums){
+void AsyncAdapterClient::MakeTransaction_multi_abort(uint64_t txNum, uint64_t txSize, uint64_t batchSize, Xoroshiro128Plus &rnd, FastZipf &zipf, std::vector<int> abort_tx_nums){
 
   int tx_num = 0;
   bool conflict = false;
@@ -308,6 +308,12 @@ void AsyncAdapterClient::MakeTransaction(uint64_t txNum, uint64_t txSize, uint64
         }
         case PUT: {
           pre_write_set.push_back(op);
+          for(auto itr = read_set.begin(); itr != read_set.end(); ++itr){
+            if ((*itr).key == op.key){
+              conflict = true;
+            }
+            break;
+          }
           break;
         }
       }
@@ -381,6 +387,12 @@ void AsyncAdapterClient::MakeTransaction(uint64_t txNum, uint64_t txSize, uint64
         }
         case PUT: {
           pre_write_set.push_back(op);
+          for(auto itr = read_set.begin(); itr != read_set.end(); ++itr){
+            if ((*itr).key == op.key){
+              conflict = true;
+            }
+            break;
+          }
           break;
         }
       }
@@ -439,13 +451,15 @@ void AsyncAdapterClient::MakeTransaction(uint64_t txNum, uint64_t txSize, uint64
 }
 
 
-void AsyncAdapterClient::MakeTransaction_old(uint64_t txNum, uint64_t txSize, uint64_t batchSize, Xoroshiro128Plus &rnd, FastZipf &zipf, std::vector<int> abort_tx_nums){
+void AsyncAdapterClient::MakeTransaction_single_abort(uint64_t txNum, uint64_t txSize, uint64_t batchSize, Xoroshiro128Plus &rnd, FastZipf &zipf, std::vector<int> abort_tx_nums){
 
   int tx_num = 0;
-  bool batch_finish = false;
+  bool tx_conflict_finish = false;
+  bool op_conflict_finish = false;
   int thisTxWrite = 0;
   int outstandingOpCount_for_batch = 0UL;
   int finishedOpCount_for_batch = 0UL;
+  bool duplicate = false;
 
   //旋回のバッチで使用した変数を初期化
   transaction.clear();
@@ -489,7 +503,7 @@ void AsyncAdapterClient::MakeTransaction_old(uint64_t txNum, uint64_t txSize, ui
     commitTxNum++;
   }
   
-  //前回のバッチでabortになったトランザクションをバッチに含む
+  //前回のバッチでabortになったトランザクションをバッチに含む。
   for(auto itr = abort_tx_nums.begin(); itr != abort_tx_nums.end(); ++itr){
     Debug("abort transaction in previous batch\n");
     Debug("abort_tx_nums_size : %d\n", abort_tx_nums.size());
@@ -500,6 +514,16 @@ void AsyncAdapterClient::MakeTransaction_old(uint64_t txNum, uint64_t txSize, ui
       Operation op = tx[op_num];
       switch (op.type) {
         case GET: {
+          for (auto itr = pre_read_set.begin(); itr != pre_read_set.end(); ++itr){
+            if ((*itr).key == op.key){
+              duplicate = true;
+              break;
+            }
+          }
+          if (duplicate == true){
+            duplicate = false;
+            continue;
+          }
           pre_read_set.push_back(op);
           //このwriteによって、同一バッチ内でconflictが発生するか否かを検証。
           //発生する場合、このreadを含むトランザクションは次回のバッチに回し、このトランザクションを除いたバッチを作成する。
@@ -508,23 +532,68 @@ void AsyncAdapterClient::MakeTransaction_old(uint64_t txNum, uint64_t txSize, ui
               //バッチをこのトランザクションを除いて作成する
               Debug("conflict occur");
               commitTxNum = tx_num;
-              batch_finish = true;
+              tx_conflict_finish = true;
               tx_num = batchSize;
             }
+            break;
+          }
+          for (auto itr = pre_write_set.begin(); itr != pre_write_set.end(); ++itr){
+            if ((*itr).key == op.key){
+              Debug("conflict occur in same transaction");
+              if (readwrite == true){
+                op_conflict_finish = true;
+                tx_num = batchSize;
+              }
+              else {
+                writeread = true;
+              }
+            }
+            break;
           }
           break;
         }
         case PUT: {
+          for (auto itr = pre_write_set.begin(); itr != pre_write_set.end(); ++itr){
+            if ((*itr).key == op.key){
+              duplicate = true;
+              break;
+            }
+          }
+          if (duplicate == true){
+            duplicate = false;
+            continue;
+          }
           pre_write_set.push_back(op);
+          for(auto itr = read_set.begin(); itr != read_set.end(); ++itr){
+            if ((*itr).key == op.key){
+              tx_conflict_finish = true;
+              tx_num = batchSize;
+            }
+            break;
+          }
+          for (auto itr = pre_read_set.begin(); itr != pre_read_set.end(); ++itr){
+            if ((*itr).key == op.key){
+              Debug("conflict occur in same transaction");
+              if (writeread == true){
+                op_conflict_finish = true;
+                tx_num = batchSize;
+              }
+              else {
+                readwrite = true;
+              }
+            }
+            break;
+          }
           break;
         }
       }
       outstandingOpCount_for_batch++;
       finishedOpCount_for_batch++;
     }
-    if (batch_finish == false){
+    if (tx_conflict_finish == false || op_conflict_finish == false){
       Debug("%d : transaction finish\n", tx_num);
       for(auto itr = pre_read_set.begin(); itr != pre_read_set.end(); ++itr){
+        readValues.insert(std::make_pair((*itr).key, ""));
         read_set.push_back(*itr);
         transaction.push_back(*itr);
         keyTxMap.insert(std::make_pair((*itr).key, tx_num));
@@ -552,7 +621,8 @@ void AsyncAdapterClient::MakeTransaction_old(uint64_t txNum, uint64_t txSize, ui
     }
   }
 
-  if (batch_finish) goto MAKE_TX_FIN;
+  if (op_conflict_finish) goto MAKE_TX_FIN;
+  if (tx_conflict_finish) goto MAKE_TX_FIN;
 
 
   //通常のトランザクションを生成する部分
@@ -563,6 +633,16 @@ void AsyncAdapterClient::MakeTransaction_old(uint64_t txNum, uint64_t txSize, ui
           readValues, batchSize, rnd, zipf);
       switch (op.type) {
         case GET: {
+          for (auto itr = pre_read_set.begin(); itr != pre_read_set.end(); ++itr){
+            if ((*itr).key == op.key){
+              duplicate = true;
+              break;
+            }
+          }
+          if (duplicate == true){
+            duplicate = false;
+            continue;
+          }
           pre_read_set.push_back(op);
           //このwriteによって、同一バッチ内でconflictが発生するか否かを検証。
           //発生する場合、このreadを含むトランザクションは次回のバッチに回し、このトランザクションを除いたバッチを作成する。
@@ -570,27 +650,72 @@ void AsyncAdapterClient::MakeTransaction_old(uint64_t txNum, uint64_t txSize, ui
             if ((*itr).key == op.key){
               //バッチをこのトランザクションを除いて作成する
               Debug("conflict occur");
-              if (batch_finish == false){
+              if (tx_conflict_finish == false){
                 commitTxNum = tx_num;
               }
               Debug("commitTxNum: %d\n", commitTxNum);
-              batch_finish = true;
+              tx_conflict_finish = true;
               tx_num = batchSize;
             }
+            break;
+          }
+          for (auto itr = pre_write_set.begin(); itr != pre_write_set.end(); ++itr){
+            if ((*itr).key == op.key){
+              Debug("conflict occur in same transaction");
+              if (readwrite == true){
+                op_conflict_finish = true;
+                tx_num = batchSize;
+              }
+              else {
+                writeread = true;
+              }
+            }
+            break;
           }
           break;
         }
         case PUT: {
+          for (auto itr = pre_write_set.begin(); itr != pre_write_set.end(); ++itr){
+            if ((*itr).key == op.key){
+              duplicate = true;
+              break;
+            }
+          }
+          if (duplicate == true){
+            duplicate = false;
+            continue;
+          }
           pre_write_set.push_back(op);
+          for(auto itr = read_set.begin(); itr != read_set.end(); ++itr){
+            if ((*itr).key == op.key){
+              tx_conflict_finish = true;
+              tx_num = batchSize;
+            }
+            break;
+          }
+          for (auto itr = pre_read_set.begin(); itr != pre_read_set.end(); ++itr){
+            if ((*itr).key == op.key){
+              Debug("conflict occur in same transaction");
+              if (writeread == true){
+                op_conflict_finish = true;
+                tx_num = batchSize;
+              }
+              else {
+                readwrite = true;
+              }
+            }
+            break;
+          }
           break;
         }
       }
       outstandingOpCount_for_batch++;
       finishedOpCount_for_batch++;
     }
-    if (batch_finish == false){
+    if (tx_conflict_finish == false || op_conflict_finish == false){
       Debug("%d : transaction finish\n", tx_num);
       for(auto itr = pre_read_set.begin(); itr != pre_read_set.end(); ++itr){
+        readValues.insert(std::make_pair((*itr).key, ""));
         read_set.push_back(*itr);
         transaction.push_back(*itr);
         keyTxMap.insert(std::make_pair((*itr).key, tx_num));
@@ -619,6 +744,13 @@ void AsyncAdapterClient::MakeTransaction_old(uint64_t txNum, uint64_t txSize, ui
   }
 
 MAKE_TX_FIN:
+
+  if (op_conflict_finish == true){
+    if (readwrite == true){
+      readwrite = false;
+      writeread = true;
+    }
+  }
 
   if (writeOpNum == 0){
     ExecuteReadOperation();
