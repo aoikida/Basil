@@ -514,6 +514,7 @@ void AsyncAdapterClient::MakeTransaction_single_abort(uint64_t txNum, uint64_t t
       Operation op = tx[op_num];
       switch (op.type) {
         case GET: {
+          pre_read_set.push_back(op);
           for (auto itr = pre_read_set.begin(); itr != pre_read_set.end(); ++itr){
             if ((*itr).key == op.key){
               duplicate = true;
@@ -524,7 +525,6 @@ void AsyncAdapterClient::MakeTransaction_single_abort(uint64_t txNum, uint64_t t
             duplicate = false;
             continue;
           }
-          pre_read_set.push_back(op);
           //このwriteによって、同一バッチ内でconflictが発生するか否かを検証。
           //発生する場合、このreadを含むトランザクションは次回のバッチに回し、このトランザクションを除いたバッチを作成する。
           for(auto itr = write_set.begin(); itr != write_set.end(); ++itr){
@@ -553,6 +553,7 @@ void AsyncAdapterClient::MakeTransaction_single_abort(uint64_t txNum, uint64_t t
           break;
         }
         case PUT: {
+          pre_write_set.push_back(op);
           for (auto itr = pre_write_set.begin(); itr != pre_write_set.end(); ++itr){
             if ((*itr).key == op.key){
               duplicate = true;
@@ -563,7 +564,6 @@ void AsyncAdapterClient::MakeTransaction_single_abort(uint64_t txNum, uint64_t t
             duplicate = false;
             continue;
           }
-          pre_write_set.push_back(op);
           for(auto itr = read_set.begin(); itr != read_set.end(); ++itr){
             if ((*itr).key == op.key){
               tx_conflict_finish = true;
@@ -633,6 +633,7 @@ void AsyncAdapterClient::MakeTransaction_single_abort(uint64_t txNum, uint64_t t
           readValues, batchSize, rnd, zipf);
       switch (op.type) {
         case GET: {
+          pre_read_set.push_back(op);
           for (auto itr = pre_read_set.begin(); itr != pre_read_set.end(); ++itr){
             if ((*itr).key == op.key){
               duplicate = true;
@@ -643,7 +644,6 @@ void AsyncAdapterClient::MakeTransaction_single_abort(uint64_t txNum, uint64_t t
             duplicate = false;
             continue;
           }
-          pre_read_set.push_back(op);
           //このwriteによって、同一バッチ内でconflictが発生するか否かを検証。
           //発生する場合、このreadを含むトランザクションは次回のバッチに回し、このトランザクションを除いたバッチを作成する。
           for(auto itr = write_set.begin(); itr != write_set.end(); ++itr){
@@ -675,6 +675,7 @@ void AsyncAdapterClient::MakeTransaction_single_abort(uint64_t txNum, uint64_t t
           break;
         }
         case PUT: {
+          pre_write_set.push_back(op);
           for (auto itr = pre_write_set.begin(); itr != pre_write_set.end(); ++itr){
             if ((*itr).key == op.key){
               duplicate = true;
@@ -685,7 +686,6 @@ void AsyncAdapterClient::MakeTransaction_single_abort(uint64_t txNum, uint64_t t
             duplicate = false;
             continue;
           }
-          pre_write_set.push_back(op);
           for(auto itr = read_set.begin(); itr != read_set.end(); ++itr){
             if ((*itr).key == op.key){
               tx_conflict_finish = true;
