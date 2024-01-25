@@ -450,7 +450,6 @@ void AsyncAdapterClient::MakeTransaction_multi_abort(uint64_t txNum, uint64_t tx
   //conflictが発生したトランザクションは消さずに保存しておき、次の周回で拾う。
 }
 
-
 void AsyncAdapterClient::MakeTransaction_single_abort(uint64_t txNum, uint64_t txSize, uint64_t batchSize, Xoroshiro128Plus &rnd, FastZipf &zipf, std::vector<int> abort_tx_nums){
 
   int tx_num = 0;
@@ -460,6 +459,7 @@ void AsyncAdapterClient::MakeTransaction_single_abort(uint64_t txNum, uint64_t t
   int outstandingOpCount_for_batch = 0UL;
   int finishedOpCount_for_batch = 0UL;
   bool duplicate = false;
+  
 
   //旋回のバッチで使用した変数を初期化
   transaction.clear();
@@ -469,6 +469,7 @@ void AsyncAdapterClient::MakeTransaction_single_abort(uint64_t txNum, uint64_t t
   write_set.clear();
   writeOpNum = 0;
   commitTxNum = 0;
+  txNum_writeSet.clear();
   
   
   //前回のバッチでconflictが発生し、バッチに含まれなかったトランザクションがある場合、バッチにそのトランザクションを含む。
@@ -490,7 +491,7 @@ void AsyncAdapterClient::MakeTransaction_single_abort(uint64_t txNum, uint64_t t
       writeOpNum++;
     }
     if (conflict_write_set.size() != 0){
-        ExecuteWriteOperation(0, conflict_write_set);
+        ExecuteWriteOperation(txNum, conflict_write_set);
         conflict_write_set.clear();
     }
     pre_write_set.clear();
@@ -607,10 +608,14 @@ void AsyncAdapterClient::MakeTransaction_single_abort(uint64_t txNum, uint64_t t
         thisTxWrite++;
       }
 
+      /*
       if (thisTxWrite != 0){
         ExecuteWriteOperation(tx_num, pre_write_set);
         thisTxWrite == 0;
       }
+      */
+
+      txNum_writeSet.push_back(std::make_pair(txNum, pre_write_set));
 
       pre_write_set.clear();
       pre_read_set.clear();
@@ -729,10 +734,14 @@ void AsyncAdapterClient::MakeTransaction_single_abort(uint64_t txNum, uint64_t t
         thisTxWrite++;
       }
 
+      /*
       if (thisTxWrite != 0){
         ExecuteWriteOperation(tx_num, pre_write_set);
         thisTxWrite == 0;
       }
+      */
+
+      txNum_writeSet.push_back(std::make_pair(txNum, pre_write_set));
 
       pre_write_set.clear();
       pre_read_set.clear();
@@ -745,6 +754,19 @@ void AsyncAdapterClient::MakeTransaction_single_abort(uint64_t txNum, uint64_t t
 
 MAKE_TX_FIN:
 
+  if (readwrite == true || writeOpNum == 0){
+    //readを先に行う
+    ExecuteReadOperation();
+  }
+  else{
+    //writeを先に行う // 通常
+    for (auto itr = txNum_writeSet.begin(); itr != txNum_writeSet.begin(); ++itr){
+      for (int i = 0; i < (itr->second).size(); i++){
+        ExecuteWriteOperation(itr->first, itr->second);
+      }
+    }
+  }
+
   if (op_conflict_finish == true){
     if (readwrite == true){
       readwrite = false;
@@ -755,12 +777,6 @@ MAKE_TX_FIN:
     readwrite = false;
     writeread = false;
   }
-
-  if (writeOpNum == 0){
-    ExecuteReadOperation();
-  }
-  
-  //conflictが発生したトランザクションは消さずに保存しておき、次の周回で拾う。
 }
 
 void AsyncAdapterClient::ExecuteWriteOperation(int tx_num, std::vector<Operation> write_set){
@@ -924,7 +940,16 @@ void AsyncAdapterClient::GetCallback_batch(int status, const std::string &key,
   readValues.insert(std::make_pair(key, val));
   getCbCount++;
   if (readOpNum <= getCbCount){
-      ExecuteCommit();
+      if (readwrite){
+        for (auto itr = txNum_writeSet.begin(); itr != txNum_writeSet.begin(); ++itr){
+          for (int i = 0; i < (itr->second).size(); i++){
+            ExecuteWriteOperation(itr->first, itr->second);
+          }
+        }
+      }
+      else{
+        ExecuteCommit();
+      }
       getCbCount = 0;
   }
 }
@@ -971,10 +996,10 @@ void AsyncAdapterClient::PutCallback_batch(int status, const std::string &key,
     Debug("Put(%s,%s) callback.", key.c_str(), val.c_str());
     putCbCount++;
     if (writeOpNum <= putCbCount){
-      if (readOpNum != 0){
+      if (readOpNum != 0 && writeread){
         ExecuteReadOperation();
       }
-      else if (readOpNum == 0){
+      else {
         ExecuteCommit();
       }
       putCbCount = 0;

@@ -76,6 +76,7 @@ class AsyncAdapterClient : public AsyncClient {
   bool writeread = false;
   std::vector<transaction_status_t> results;
   std::multimap<std::string, int> keyTxMap;
+  std::vector<std::pair<int, std::vector<Operation>>> txNum_writeSet;
 
   Client *client;
   uint32_t timeout;
