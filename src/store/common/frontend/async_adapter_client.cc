@@ -751,6 +751,10 @@ MAKE_TX_FIN:
       writeread = true;
     }
   }
+  else{
+    readwrite = false;
+    writeread = false;
+  }
 
   if (writeOpNum == 0){
     ExecuteReadOperation();
