@@ -95,6 +95,7 @@ class AsyncAdapterClient : public AsyncClient {
   std::vector<Operation> write_set;
   std::vector<Operation> pre_write_set;
   std::vector<Operation> conflict_write_set;
+  std::vector<std::vector<Operation>> abort_set;
 
   std::vector<std::string> key_list;
 
