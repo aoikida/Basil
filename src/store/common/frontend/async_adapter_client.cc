@@ -811,22 +811,20 @@ void AsyncAdapterClient::MakeTransaction_multi_abort(uint64_t txNum, uint64_t tx
   else{
     //writeを先に行う // 通常
     writeread = true;
-    for (auto itr = txNum_writeSet.begin(); itr != txNum_writeSet.end(); ++itr){
-      ExecuteWriteOperation(itr->first, itr->second);
-    }
+    ExecuteWriteOperation();
   }
 
 }
 
 
-void AsyncAdapterClient::ExecuteWriteOperation(int tx_num, std::vector<Operation> write_set){
+void AsyncAdapterClient::ExecuteWriteOperation(){
 
-  for(auto itr = write_set.begin(); itr != write_set.end(); ++itr) {
-    client->Put_batch((*itr).key, (*itr).value, std::bind(&AsyncAdapterClient::PutCallback_batch,
+  for(auto op = write_set.begin(); op != write_set.end(); ++op){
+    client->Put(op.key, op.value, std::bind(&AsyncAdapterClient::PutCallback,
             this, std::placeholders::_1, std::placeholders::_2,
             std::placeholders::_3), std::bind(&AsyncAdapterClient::PutTimeout,
               this, std::placeholders::_1, std::placeholders::_2,
-              std::placeholders::_3), tx_num, timeout);
+              std::placeholders::_3), timeout);
   }
 
 }
@@ -834,17 +832,13 @@ void AsyncAdapterClient::ExecuteWriteOperation(int tx_num, std::vector<Operation
 
 void AsyncAdapterClient::ExecuteReadOperation(){
   
-  key_list.clear();
+   for(auto op = read_set.begin(); op != read_set.end(); ++op){
+    client->Get(op->key, std::bind(&AsyncAdapterClient::GetCallback_batch, this,
+        std::placeholders::_1, std::placeholders::_2, std::placeholders::_3,
+        std::placeholders::_4), std::bind(&AsyncAdapterClient::GetTimeout, this,
+          std::placeholders::_1, std::placeholders::_2), timeout);
+   }
 
-  for(auto itr = read_set.begin(); itr != read_set.end(); ++itr){
-    gcb_list.push_back(std::bind(&AsyncAdapterClient::GetCallback_batch, this,
-          std::placeholders::_1, std::placeholders::_2, std::placeholders::_3,
-          std::placeholders::_4));
-    key_list.push_back((*itr).key);
-  }
-
-  client->Get_batch(key_list, gcb_list, &keyTxMap, std::bind(&AsyncAdapterClient::GetTimeout_batch, this,
-          std::placeholders::_1, std::placeholders::_2, std::placeholders::_3, std::placeholders::_4), timeout);
 }
 
 
@@ -981,11 +975,7 @@ void AsyncAdapterClient::GetCallback_batch(int status, const std::string &key,
   getCbCount++;
   if (readOpNum <= getCbCount){
       if (writeOpNum != 0 && readwrite){
-        for (auto itr = txNum_writeSet.begin(); itr != txNum_writeSet.begin(); ++itr){
-          for (int i = 0; i < (itr->second).size(); i++){
-            ExecuteWriteOperation(itr->first, itr->second);
-          }
-        }
+        ExecuteWriteOperation(1, write_set);
       }
       else{
         ExecuteCommit();
@@ -993,7 +983,6 @@ void AsyncAdapterClient::GetCallback_batch(int status, const std::string &key,
       getCbCount = 0;
   }
 }
-
 
 void AsyncAdapterClient::GetTimeout(int status, const std::string &key) {
   Warning("Get(%s) timed out :(", key.c_str());
