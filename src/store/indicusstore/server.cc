@@ -589,6 +589,27 @@ void Server::ReceiveMessageInternal_batch(const TransportAddress &remote,
         }
       }
     }
+    else if (typeArray[i] == phase2.GetTypeName()) {
+
+        if(!params.multiThreading && (!params.mainThreadDispatching || params.dispatchMessageReceive)){
+          phase2.ParseFromString(datas[0]);
+          HandlePhase2(remote, phase2);
+        }
+        else{
+          proto::Phase2* p2 = GetUnusedPhase2message();
+          p2->ParseFromString(datas[0]);
+          if(!params.mainThreadDispatching || params.dispatchMessageReceive){
+            HandlePhase2(remote, *p2);
+          }
+          else{
+            auto f = [this, &remote, p2](){
+              this->HandlePhase2(remote, *p2);
+              return (void*) true;
+            };
+            transport->DispatchTP_main(std::move(f));
+          }
+        }
+    }
     else if (typeArray[i] == writeback.GetTypeName()) {
       
 

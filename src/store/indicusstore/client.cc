@@ -877,12 +877,7 @@ void Client::HandleAllPhase1Received(PendingRequest *req) {
     else {
       Debug("slow path");
       //ここを通っているぽい
-      if (params.batchOptimization){
-        Phase2_batch(req);
-      }
-      else {
-        Phase2(req);
-      }
+      Phase2(req);
       
     }
   }
@@ -1066,12 +1061,7 @@ void Client::Phase2Callback(uint64_t txnId, int group, proto::CommitDecision dec
   req->decision = decision;
   req->decision_view = decision_view;
 
-  if (params.batchOptimization){
-    Writeback_batch(req);
-  }
-  else{
-    Writeback(req);
-  }
+  Writeback(req);
   
 }
 
