@@ -395,6 +395,7 @@ virtual void Phase2Equivocate_Simulate(uint64_t id, const proto::Transaction &tx
   /* Callbacks for hearing back from a shard for an operation. */
   void HandleReadReply(const proto::ReadReply &readReply);
   void HandleReadReply_batch(const std::vector<proto::ReadReply> &readReplies);
+  void HandleReadReply_buffer(const std::vector<proto::ReadReply> &readReplies);
   void HandleReadReply_sig_batch(const std::vector<proto::ReadReply> &readReplies);
   void HandlePhase1Reply(proto::Phase1Reply &phase1Reply);
   void ProcessP1R(proto::Phase1Reply &reply, bool FB_path = false, PendingFB *pendingFB = nullptr, const std::string *txnDigest = nullptr);
@@ -434,6 +435,7 @@ virtual void Phase2Equivocate_Simulate(uint64_t id, const proto::Transaction &tx
   std::vector<proto::ReadReply *> readReplies;
   std::vector<proto::Phase1Reply *> p1Replies;
   std::vector<proto::Phase2Reply *> p2Replies;
+  std::vector<proto::ReadReply> allReplies;
 
 
   //private fallback functions

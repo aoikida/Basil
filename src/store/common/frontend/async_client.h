@@ -38,6 +38,8 @@
 #define FAILED 1
 typedef std::function<void(transaction_status_t, std::map<std::string, std::string>)> execute_callback;
 
+typedef std::function<void(transaction_status_t, std::map<std::string, std::string>, uint64_t, uint64_t)> execute_big_callback;
+
 typedef std::function<void(std::vector<transaction_status_t>, std::map<std::string, std::string>)> execute_callback_batch;
 
 class AsyncClient {
@@ -50,7 +52,7 @@ class AsyncClient {
 
   virtual void Execute_ycsb(AsyncTransaction *txn, execute_callback ecb, bool retry=false) = 0;
 
-  virtual void Execute_batch(AsyncTransaction *txn, execute_callback_batch ecb, bool retry=false) = 0;
+  virtual void Execute_batch(AsyncTransaction *txn, execute_big_callback ecb, bool retry=false) = 0;
 
   inline const Stats &GetStats() const { return stats; }
  protected:

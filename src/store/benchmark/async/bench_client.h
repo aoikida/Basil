@@ -49,6 +49,8 @@ class BenchmarkClient {
   void Start(bench_done_callback bdcb, bool batchOptimization, bool benchmark);
   void OnReply(int result);
 
+  void OnReplyBig(int result, int batch_size, int abortSize);
+
   void OnReply_batch(std::vector<transaction_status_t> results);
 
   void StartLatency();
@@ -56,6 +58,7 @@ class BenchmarkClient {
   virtual void SendNext_ycsb() = 0;
   virtual void SendNext_batch() = 0;
   void IncrementSent(int result);
+  void IncrementSentBig(int result, int abortSize);
   void IncrementSent_batch(std::vector<transaction_status_t> results);
   inline bool IsFullyDone() { return done; }
 

@@ -70,8 +70,8 @@ void AsyncTransactionBenchClient::SendNext_batch() {
   currTxnAttempts = 0;
   //common/frontend/async_adapter_client.ccに飛ぶ
   client.Execute_batch(currTxn,
-    std::bind(&AsyncTransactionBenchClient::ExecuteCallback_batch, this,
-      std::placeholders::_1, std::placeholders::_2));
+    std::bind(&AsyncTransactionBenchClient::ExecuteBigCallback, this,
+      std::placeholders::_1, std::placeholders::_2, std::placeholders::_3, std::placeholders::_4));
 }
 
 void AsyncTransactionBenchClient::ExecuteCallback(transaction_status_t result,
@@ -124,6 +124,49 @@ void AsyncTransactionBenchClient::ExecuteCallback(transaction_status_t result,
             std::placeholders::_1, std::placeholders::_2), true); //last flag = retry
         });
     }
+  }
+}
+
+void AsyncTransactionBenchClient::ExecuteBigCallback(transaction_status_t result,
+    std::map<std::string, std::string> readValues, uint64_t batchSize, uint64_t abortSize) {
+  Debug("ExecuteCallback with result %d.", result);
+  stats.Increment(GetLastOp() + "_attempts", 1);
+  ++currTxnAttempts;
+  if (result == COMMITTED || result == ABORTED_USER ||
+      (maxAttempts != -1 && currTxnAttempts >= static_cast<uint64_t>(maxAttempts)) ||
+      !retryAborted) {
+    if (result == COMMITTED) {
+      stats.Increment(GetLastOp() + "_committed", 1);
+    }
+    if(result == ABORTED_USER) {
+      stats.Increment(GetLastOp() + "_aborted_user", 1);
+    }
+    if (retryAborted) {
+      //stats.Add(GetLastOp() + "_attempts_list", currTxnAttempts);  //TODO: uncomment if want to collect attempt stats
+    }
+    delete currTxn;
+    currTxn = nullptr;
+    ///ここを通っている。ここがトランザクションのlatencyのendかつ、次のトランザクションのlatencyのstart
+    OnReplyBig(result, batchSize, abortSize);
+  } else {
+    stats.Increment(GetLastOp() + "_" + std::to_string(result), 1);
+    uint64_t backoff = 0;
+    if (abortBackoff > 0) {
+      uint64_t exp = std::min(currTxnAttempts - 1UL, 56UL);
+      Debug("Exp is %lu (min of %lu and 56.", exp, currTxnAttempts - 1UL);
+      uint64_t upper = std::min((1UL << exp) * abortBackoff, maxBackoff);
+      Debug("Upper is %lu (min of %lu and %lu.", upper, (1UL << exp) * abortBackoff,
+          maxBackoff);
+      backoff = std::uniform_int_distribution<uint64_t>(0UL, upper)(GetRand());
+      stats.Increment(GetLastOp() + "_backoff", backoff);
+      Debug("Backing off for %lums", backoff);
+    }
+    //std::cerr << "backing off for ms: " << backoff << std::endl;
+    transport.Timer(backoff, [this]() {
+      client.Execute_batch(currTxn,
+          std::bind(&AsyncTransactionBenchClient::ExecuteBigCallback, this,
+          std::placeholders::_1, std::placeholders::_2, std::placeholders::_3, std::placeholders::_4), true); //last flag = retry
+      });
   }
 }
 

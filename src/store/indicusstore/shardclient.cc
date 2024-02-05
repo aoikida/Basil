@@ -182,7 +182,8 @@ void ShardClient::ReceiveMessage_batch(const TransportAddress &remote,
         }
         const_cast<std::vector<std::string> *>(&datas)->erase(std::cbegin(datas), std::cbegin(datas) + batchSizeArray[i]);
         if (params.signatureBatch){
-          HandleReadReply_sig_batch(read_replies);
+          HandleReadReply_buffer(read_replies);
+          //HandleReadReply_sig_batch(read_replies);
         }
         else {
           HandleReadReply_batch(read_replies);
@@ -276,6 +277,7 @@ void ShardClient::Begin(uint64_t id) {
 
   txn.Clear();
   readValues.clear();
+  allReplies.clear();
 }
 
 void ShardClient::Begin_batch(uint64_t id, int batch_num) {
@@ -334,9 +336,9 @@ void ShardClient::Get_batch(uint64_t id, const std::vector<std::string> &key_lis
   //とりあえずこの部分は、ループで回したらバッチに対応できそう。
   for(int i = 0; i < numRead; i++){
     if (BufferGet(key_list[i], rcb_list[i])) {
-    Debug("[group %i] read from buffer.", group);
-    return;
-  }
+      Debug("[group %i] read from buffer.", group);
+      continue;
+    }
     uint64_t reqId = lastReqId++;
     Debug("reqId : %d", reqId);
     PendingQuorumGet *pendingGet = new PendingQuorumGet(reqId);
@@ -352,7 +354,7 @@ void ShardClient::Get_batch(uint64_t id, const std::vector<std::string> &key_lis
     reads[i].Clear(); //初期化
     reads[i].set_req_id(reqId); //バッチ内で固定 or 変
     reads[i].set_key(key_list[i]); 
-    *reads[i].mutable_timestamp() = ts_list[i]; //注意
+    *reads[i].mutable_timestamp() = ts_list[0]; //注意
     read_batch.push_back(&reads[i]);
   }
 
@@ -371,10 +373,10 @@ void ShardClient::Get_batch(uint64_t id, const std::vector<std::string> &key_lis
   */
 }
 
-
 void ShardClient::Put(uint64_t id, const std::string &key,
       const std::string &value, put_callback pcb, put_timeout_callback ptcb,
       uint32_t timeout) {
+  Debug("shardclient::Put");
   WriteMessage *writeMsg = txn.add_write_set();
   writeMsg->set_key(key);
   writeMsg->set_value(value);
@@ -1545,6 +1547,25 @@ void ShardClient::HandleReadReply_batch(const std::vector<proto::ReadReply> &rep
   }
 }
 
+void ShardClient::HandleReadReply_buffer(const std::vector<proto::ReadReply> &replies) {
+
+  
+  if (replies.size() == read_batch.size()){
+    HandleReadReply_sig_batch(replies);
+    return;
+  }
+
+  for (int i =0; i < replies.size(); i++){
+    allReplies.push_back(replies[i]);
+  }
+
+  if (allReplies.size() == read_batch.size()){
+    HandleReadReply_sig_batch(allReplies);
+    return;
+  }
+
+}
+
 /* Callback from a group replica on get operation completion. */
 void ShardClient::HandleReadReply_sig_batch(const std::vector<proto::ReadReply> &replies) {
 
@@ -1553,14 +1574,10 @@ void ShardClient::HandleReadReply_sig_batch(const std::vector<proto::ReadReply> 
 
   bool first = true;
   std::string messages;
-  std::string signature;
+
   for (int i = 0; i < replies.size(); i++){
     if (replies[i].has_signed_write()){
       messages.append(replies[i].signed_write().data());
-      if (first){
-        signature = replies[i].signed_write().signature();
-        first = false;
-      }
     }
   }
   
@@ -1577,13 +1594,22 @@ void ShardClient::HandleReadReply_sig_batch(const std::vector<proto::ReadReply> 
 
     if (params.validateProofs && params.signedMessages) {
       if (replies[i].has_signed_write()) {
-        // verifyを一括で行う方法を考える。
-        if (!skip1) {
-          bool verify_result = verifier->Verify(keyManager->GetPublicKey(replies[i].signed_write().process_id()),
-            messages, signature);
+        if (!skip1 || (replies[i].signed_write().data()).length() != 108) {
+          bool verify_result = false;
+          if ((replies[i].signed_write().data()).length() == 108){ //汎用型
+            verify_result = verifier->Verify(keyManager->GetPublicKey(replies[i].signed_write().process_id()),
+            messages, replies[i].signed_write().signature());
+          }
+          else {
+            verify_result = verifier->Verify(keyManager->GetPublicKey(replies[i].signed_write().process_id()),
+            replies[i].signed_write().data(), replies[i].signed_write().signature());
+          }
+          
           if (params.signatureBatch && verify_result) {
             Debug("Verify success\n");
-            skip1 = true;
+            if ((replies[i].signed_write().data()).length() == 108){
+              skip1 = true;
+            }
           }
           else if (!verify_result) {
             Debug("[group %i] Failed to validate signature for write.", group);
@@ -1671,7 +1697,7 @@ void ShardClient::HandleReadReply_sig_batch(const std::vector<proto::ReadReply> 
       if (params.validateProofs && params.signedMessages && params.verifyDeps) {
         proto::Signature *sig = req->preparedSigs[preparedTs].add_sigs();
         sig->set_process_id(replies[i].signed_write().process_id());
-        *sig->mutable_signature() = signature;
+        *sig->mutable_signature() = replies[i].signed_write().signature();
       }
     }
 

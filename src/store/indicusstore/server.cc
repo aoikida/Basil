@@ -567,61 +567,26 @@ void Server::ReceiveMessageInternal_batch(const TransportAddress &remote,
     }
     else if (typeArray[i] == phase1.GetTypeName()) {
       //Use only with OCC parallel, not full parallel P1. Suffers from non-atomicity in the latter case
+      //Use only with OCC parallel, not full parallel P1. Suffers from non-atomicity in the latter case
       if(!params.mainThreadDispatching || (params.dispatchMessageReceive && !params.parallel_CCC)){
-        for (int j = 0; j < batchSizeArray[i]; j++){
-          phase1s[j].ParseFromString(datas[j]);
-        }
-        const_cast<std::vector<std::string> *>(&datas)->erase(std::cbegin(datas), std::cbegin(datas) + batchSizeArray[i]);
-        HandlePhase1_batch(remote, phase1s, batchSizeArray[i]);
+        phase1.ParseFromString(datas[0]);
+        HandlePhase1(remote, phase1);
       }
       else{
-        proto::Phase1 phase1Copies [MAX_TRANSACTION_SIZE];
-        for(int j = 0; j < batchSizeArray[i]; j++){
-          phase1Copies[j].ParseFromString(datas[j]);
-        }
-        const_cast<std::vector<std::string> *>(&datas)->erase(std::cbegin(datas), std::cbegin(datas) + batchSizeArray[i]);
-
-        auto f = [this, &remote, phase1Copies, batchSizeArray, i](){
-          this->HandlePhase1_batch(remote, const_cast<proto::Phase1 *>(phase1Copies), batchSizeArray[i]);
+        proto::Phase1 *phase1Copy = GetUnusedPhase1message();
+        phase1Copy->ParseFromString(datas[0]);
+        auto f = [this, &remote, phase1Copy]() {
+          this->HandlePhase1(remote, *phase1Copy);
           return (void*) true;
         };
-
         if(params.dispatchMessageReceive){
           f();
         }
         else{
           Debug("Dispatching HandlePhase1");
-          transport->DispatchTP_main(f);
-          //transport->DispatchTP_noCB(f); //use if want to dispatch to all workers
+          //transport->DispatchTP_main(f);
+          transport->DispatchTP_noCB(f); //use if want to dispatch to all workers
         }
-      }
-    }
-    else if (typeArray[i] == phase2.GetTypeName()) {
-      if(!params.multiThreading && (!params.mainThreadDispatching || params.dispatchMessageReceive)){
-        for (int j = 0; j < batchSizeArray[i]; j++){
-          phase2.ParseFromString(datas[j]);
-          HandlePhase2(remote, phase2);
-        }
-        const_cast<std::vector<std::string> *>(&datas)->erase(std::cbegin(datas), std::cbegin(datas) + batchSizeArray[i]);
-        
-      }
-      else{
-        for (int j = 0; j < batchSizeArray[i]; j++){
-          proto::Phase2* p2 = GetUnusedPhase2message();
-          p2->ParseFromString(datas[j]);
-
-          if(!params.mainThreadDispatching || params.dispatchMessageReceive){
-            HandlePhase2(remote, *p2);
-          }
-          else{
-            auto f = [this, &remote, p2](){
-              this->HandlePhase2(remote, *p2);
-              return (void*) true;
-            };
-            transport->DispatchTP_main(std::move(f));
-          }
-        }
-        const_cast<std::vector<std::string> *>(&datas)->erase(std::cbegin(datas), std::cbegin(datas) + batchSizeArray[i]);
       }
     }
     else if (typeArray[i] == writeback.GetTypeName()) {
@@ -1025,7 +990,8 @@ void Server::HandleRead(const TransportAddress &remote,
 void Server::HandleRead_batch(const TransportAddress &remote,
      proto::Read *read_msgs, int batch_size) {
   
-  Debug("Server::HandleRead_batch");
+  Debug("Server::HandleRead_batch : batch_size: %d", batch_size);
+
   //auto sendCB = [this, remoteCopy, readReply, c_id = msg.timestamp().id(), req_id=msg.req_id()]() {
   //Debug("Sent ReadReply[%lu:%lu]", c_id, req_id);  
   std::vector<Message *> readReplies;
@@ -1152,6 +1118,21 @@ void Server::HandleRead_batch(const TransportAddress &remote,
       Debug("indicus::SendMessage_batch end");
       delete remoteCopy;
     }
+    else if (params.signatureBatch){
+      std::vector<::google::protobuf::Message *> msgs;
+      std::vector<proto::SignedMessage *> smsgs;
+      for (int i = 0; i < batch_size; i++){
+        proto::Write *write = new proto::Write(static_cast<proto::ReadReply*>(readReplies[i])->write());
+        msgs.push_back(write);
+        smsgs.push_back(static_cast<proto::ReadReply*>(readReplies[i])->mutable_signed_write());
+      }
+      SignBatchedReadMessage(msgs, keyManager->GetPrivateKey(id), id, smsgs);
+      this->transport->SendMessage_batch(this, *remoteCopy, readReplies);
+      for (int i = 0; i < batch_size; i++){
+        delete msgs[i];
+      }
+      delete remoteCopy;
+    }
     else if (params.signatureBatchSize == 1) {
       if(params.multiThreading){
         auto f = [this, readReplies, batch_size, remoteCopy]()
@@ -1171,7 +1152,6 @@ void Server::HandleRead_batch(const TransportAddress &remote,
         transport->DispatchTP_noCB(std::move(f));
       }
       else{
-        
         for (int i = 0; i < batch_size; i++){
           if (static_cast<proto::ReadReply*>(readReplies[i])->write().has_committed_value() || (params.verifyDeps && static_cast<proto::ReadReply*>(readReplies[i])->write().has_prepared_value())){
             proto::Write* write = new proto::Write(static_cast<proto::ReadReply*>(readReplies[i])->write());
@@ -1181,35 +1161,6 @@ void Server::HandleRead_batch(const TransportAddress &remote,
         }
         this->transport->SendMessage_batch(this, *remoteCopy, readReplies);
         Debug("indicus::SendMessage_batch end");
-        delete remoteCopy;
-        
-      }
-    }
-    else {
-      if(params.multiThreading){
-        // not implemented yet
-        /*
-        std::vector<::google::protobuf::Message *> msgs;
-        proto::Write* write = new proto::Write(readReply->write()); //TODO might want to add re-use buffer
-        msgs.push_back(write);
-        std::vector<proto::SignedMessage *> smsgs;
-        smsgs.push_back(readReply->mutable_signed_write());
-
-        SignMessages(msgs, keyManager->GetPrivateKey(id), id, smsgs, params.merkleBranchFactor);
-        delete write;
-        transport->DispatchTP_noCB(std::move(f));
-        */
-      }
-      else{
-        std::vector<::google::protobuf::Message *> msgs;
-        std::vector<proto::SignedMessage *> smsgs;
-        for (int i = 0; i < batch_size; i++){
-          proto::Write write(static_cast<proto::ReadReply*>(readReplies[i])->write());
-          msgs.push_back(&write);
-          smsgs.push_back(static_cast<proto::ReadReply*>(readReplies[i])->mutable_signed_write());
-        }
-        SignMessages(msgs, keyManager->GetPrivateKey(id), id, smsgs, params.merkleBranchFactor);
-        this->transport->SendMessage_batch(this, *remoteCopy, readReplies);
         delete remoteCopy;
       }
     }

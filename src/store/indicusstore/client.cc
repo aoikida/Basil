@@ -237,22 +237,20 @@ void Client::Begin_batch(begin_callback_batch bcb, begin_timeout_callback btcb,
       }
       first = false;
     }
+
     Latency_Start(&executeLatency);
-    client_seq_num += params.batchSize;
+    client_seq_num++;
     //std::cerr<< "BEGIN TX with client_seq_num: " << client_seq_num << std::endl;
-    google::protobuf::uint64 timestamp = timeServer.GetTime();
-    for (int i = 0; i < params.batchSize; i++){
-      Debug("BEGIN [%lu:%lu] with timestamp: %lu", client_id, client_seq_num + i, timestamp);
-      txnBatch[i] = proto::Transaction();
-      txnBatch[i].set_client_id(client_id);
-      txnBatch[i].set_client_seq_num(client_seq_num + i);
-      // Optimistically choose a read timestamp for all reads in this transaction
-      txnBatch[i].mutable_timestamp()->set_timestamp(timestamp);
-      txnBatch[i].mutable_timestamp()->set_id(client_id);
-    }
+    Debug("BEGIN [%lu]", client_seq_num);
+
+    txn = proto::Transaction();
+    txn.set_client_id(client_id);
+    txn.set_client_seq_num(client_seq_num);
+    // Optimistically choose a read timestamp for all reads in this transaction
+    txn.mutable_timestamp()->set_timestamp(timeServer.GetTime());
+    txn.mutable_timestamp()->set_id(client_id);
     //ここでExecuteNextOperationを実行してるみたい
     bcb(client_seq_num, params.numOps, params.batchSize, rnd, zipf, abort_tx_nums);
-    abort_tx_nums.clear();
   });
 }
 
@@ -388,25 +386,14 @@ void Client::Get_batch(const std::vector<std::string>& key_list, std::vector<get
     */
 
     // Contact the appropriate shard to get the value.
-    std::vector<int> txnGroups(txnBatch[0].involved_groups().begin(), txnBatch[0].involved_groups().end());
+    std::vector<int> txnGroups(txn.involved_groups().begin(), txn.involved_groups().end());
     int id = (*part)(key_list[0], nshards, -1, txnGroups) % ngroups;
     // If needed, add this shard to set of participants and send BEGIN.
-    if (!IsParticipant_batch(id)) {
-      /*
-      for(int batch_num = 0; batch_num < params.batchSize; batch_num++){
-        txnBatch[batch_num].add_involved_groups(id);
-        bclient[id]->Begin_batch(client_seq_num + batch_num, batch_num);
-      }
-      */
-      for (int i = 0; i < params.batchSize; i++){
-        txnBatch[i].add_involved_groups(id);
-      }
-      
-      bclient[id]->Begin_batch(client_seq_num, 0);
+    if (!IsParticipant(id)) {
+      txn.add_involved_groups(id);
+      bclient[id]->Begin(client_seq_num);
     }
     Debug("Get_batch : txn.involved_groups_size() :%d", txn.involved_groups_size());
-
-
     
     //初期化
     rcb_list.clear();
@@ -434,42 +421,23 @@ void Client::Get_batch(const std::vector<std::string>& key_list, std::vector<get
                 dep.write().prepared_timestamp().id());
           }
         }
-
-        int tx_num;
-        /*
-        for(int i = 0; i < keyTxMap->size(); i++){
-          if (key == (*keyTxMap)[i].first){
-            tx_num = (*keyTxMap)[i].second;
-            keyTxMap->erase((*keyTxMap).begin()+1);
-          }
-        }
-        */
-        
-        for(auto itr = (*keyTxMap).begin(); itr != (*keyTxMap).end(); itr++){
-          if (key == itr->first){
-            tx_num = itr->second;
-            (*keyTxMap).erase(itr);
-            break;
-          }
-        }
         
         Debug("key : %s \n", key.c_str());
-        Debug("tx_num : %d \n", tx_num);
 
         if (addReadSet) {
-          ReadMessage *read = txnBatch[tx_num].add_read_set();
+          ReadMessage *read = txn.add_read_set();
           read->set_key(key);
           ts.serialize(read->mutable_readtime());
         }
         if (hasDep) {
-          *txnBatch[tx_num].add_deps() = dep;
+          *txn.add_deps() = dep;
         }
         gcb(status, key, val, ts);  
       };
 
       rcb_list.push_back(rcb);
       
-      timestamp_list.push_back(txnBatch[0].timestamp());
+      timestamp_list.push_back(txn.timestamp());
     }
 
     read_timeout_callback_batch rtcb = gtcb;
@@ -544,30 +512,22 @@ void Client::Put_batch(const std::string &key, const std::string &value,
 
   Debug("indicus::put_batch \n");
   
-  transport->Timer(0, [this, key, value, pcb, ptcb, timeout, batch_num]() {
+  transport->Timer(0, [this, key, value, pcb, ptcb, timeout]() {
     //std::cerr << "value size: " << value.size() << "; key " << BytesToHex(key,16).c_str() << std::endl;
-    Debug("PUT[%lu:%lu] for key %s", client_id, client_seq_num + batch_num, BytesToHex(key,
+    Debug("PUT[%lu:%lu] for key %s", client_id, client_seq_num, BytesToHex(key,
           16).c_str());
 
     // Contact the appropriate shard to set the value.
-    std::vector<int> txnGroups(txnBatch[0].involved_groups().begin(), txnBatch[0].involved_groups().end());
+    std::vector<int> txnGroups(txn.involved_groups().begin(), txn.involved_groups().end());
     int id = (*part)(key, nshards, -1, txnGroups) % ngroups;
 
     // If needed, add this shard to set of participants and send BEGIN.
-    if (!IsParticipant_batch(id)) {
-      /*
-      txnBatch[batch_num].add_involved_groups(id);
-      bclient[id]->Begin_batch(client_seq_num + batch_num, batch_num);
-      */
-     for (int i=0; i < params.batchSize; i++){
-      txnBatch[i].add_involved_groups(id);
-     }
-  
-     bclient[id]->Begin_batch(client_seq_num, 0);
-
+    if (!IsParticipant(id)) {
+      txn.add_involved_groups(id);
+      bclient[id]->Begin(client_seq_num);
     }
 
-    WriteMessage *write = txnBatch[batch_num].add_write_set();
+    WriteMessage *write = txn.add_write_set();
     write->set_key(key);
     write->set_value(value);
 
@@ -908,12 +868,7 @@ void Client::HandleAllPhase1Received(PendingRequest *req) {
   }
   else if (req->fast) { //TO force P2, add "req->conflict_flag". Conflict Aborts *must* go fast path.
     Debug("fast path");
-    if (params.batchOptimization){
-        Writeback_batch(req);
-      }
-      else {
-        Writeback(req);
-      }
+    Writeback(req);
   } else {
     // slow path, must log final result to 1 group
     if (req->eqv_ready) {
@@ -1234,6 +1189,7 @@ void Client::Writeback(PendingRequest *req) {
     }
 
     req->cc(result);
+    
     req->callbackInvoked = true;
   }
   //XXX use StopP1 to shortcircuit all shard clients
@@ -1275,7 +1231,6 @@ void Client::Writeback_batch(PendingRequest *req) {
       result = ABORTED_SYSTEM;
       Debug("WRITEBACK[%lu:%lu][%s] ABORT.", client_id, req->id,
           BytesToHex(req->txnDigest, 16).c_str());
-      abort_tx_nums.push_back(req->id);
       break;
     }
     default: {

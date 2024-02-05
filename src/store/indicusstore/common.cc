@@ -104,7 +104,30 @@ void SignBatchedMessage(const std::vector<::google::protobuf::Message*>& msgs,
   for(int i = 0; i < signedMessages.size(); i++){
     *(signedMessages[i])->mutable_signature() = signature;
   }
+}
 
+void SignBatchedReadMessage(const std::vector<::google::protobuf::Message*>& msgs,
+    crypto::PrivKey* privateKey, uint64_t processId,
+    const std::vector<proto::SignedMessage*>& signedMessages) {
+  
+  std::string messages;
+
+  for(int i = 0; i < msgs.size(); i++){
+    signedMessages[i]->set_process_id(processId);
+    UW_ASSERT(msgs[i]->SerializeToString(signedMessages[i]->mutable_data()));
+    messages.append(signedMessages[i]->data());
+    if ((signedMessages[i]->data()).length() != 108){
+      *(signedMessages[i])->mutable_signature() = crypto::Sign(privateKey,signedMessages[i]->data());
+    }
+  }
+
+  std::string signature = crypto::Sign(privateKey,messages);
+  for(int i = 0; i < msgs.size(); i++){
+    if ((*(signedMessages[i])->mutable_signature()).length() == 0){
+      *(signedMessages[i])->mutable_signature() = signature;
+    }
+  }
+  Debug("finish SignBatchedReadMessage");
 }
 
 void* asyncSignMessage(::google::protobuf::Message* msg,

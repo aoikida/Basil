@@ -52,6 +52,9 @@ protected:
 
     void ExecuteCallback(transaction_status_t result,
                          std::map<std::string, std::string> readValues);
+    
+    void ExecuteBigCallback(transaction_status_t result,
+                         std::map<std::string, std::string> readValues, uint64_t batchSize, uint64_t abortSize);
 
     void ExecuteCallback_batch(std::vector<transaction_status_t> result,
                          std::map<std::string, std::string> readValues);

@@ -190,6 +190,34 @@ void BenchmarkClient::OnReply(int result) {
   }
 }
 
+void BenchmarkClient::OnReplyBig(int result, int batch_size, int abortSize) {
+  Debug("BenchmarkClient::OnReply");
+
+  for (int i = 0; i< batch_size; i++){
+    if (i== 0){
+      IncrementSentBig(result, abortSize + 1);
+    }
+    else{
+      IncrementSentBig(result, 1);
+    }
+    
+  }
+
+  if (done) {
+    return;
+  }
+
+  if (delay == 0) { 
+    Latency_Start(&latency);
+    SendNext_batch();
+  } else {
+    uint64_t rdelay = rand() % delay*2;
+    transport.Timer(rdelay, std::bind(&BenchmarkClient::SendNext_batch, this));
+  }
+}
+
+
+
 
 void BenchmarkClient::OnReply_batch(std::vector<transaction_status_t> results) {
   Debug("BenchmarkClient::OnReply");
@@ -232,6 +260,54 @@ void BenchmarkClient::IncrementSent(int result) {
           //std::cout << "#start," << startMeasureTime.tv_sec << "," << startMeasureTime.tv_usec << std::endl;
         }
         uint64_t currNanos = curr.tv_sec * 1000000000ULL + curr.tv_nsec;
+        latencies.push_back(ns);
+      }
+    }
+
+    if (numRequests == -1) {
+      struct timeval currTime;
+      gettimeofday(&currTime, NULL);
+
+      struct timeval diff = timeval_sub(currTime, startTime);
+      if (diff.tv_sec >= expDuration - cooldownSec && !cooldownStarted) {
+        //diff.tv_sec() > expDuration(configで設定した時間) - cooldownSec()
+        Debug("Starting cooldown after %ld seconds.", diff.tv_sec);
+        Debug("expDuration : %ld", expDuration);
+        Debug("Cooldown time : %ld", cooldownSec);
+        Finish();
+      } else if (diff.tv_sec > expDuration) {
+        Debug("Finished cooldown after %ld seconds.", diff.tv_sec);
+        CooldownDone();
+      } else {
+        Debug("Not done after %ld seconds.", diff.tv_sec);
+      }
+    } else if (n >= numRequests){
+      CooldownDone();
+    }
+  }
+
+  n++;
+}
+
+void BenchmarkClient::IncrementSentBig(int result, int abortSize) {
+  if (started) {
+    Debug("IncrementSent is called \n");
+    // record latency
+    if (!cooldownStarted) {
+      uint64_t ns = Latency_End(&latency);
+      // TODO: use standard definitions across all clients for success/commit and failure/abort
+      if (result == 0) { // only record result if success
+        struct timespec curr;
+        clock_gettime(CLOCK_MONOTONIC, &curr);
+        if (latencies.size() == 0UL) {
+          gettimeofday(&startMeasureTime, NULL);
+          startMeasureTime.tv_sec -= ns / 1000000000ULL;
+          startMeasureTime.tv_usec -= (ns % 1000000000ULL) / 1000ULL;
+          Debug("startMeasureTime : %d, %d \n", startMeasureTime.tv_sec, startMeasureTime.tv_usec);
+          //std::cout << "#start," << startMeasureTime.tv_sec << "," << startMeasureTime.tv_usec << std::endl;
+        }
+        uint64_t currNanos = curr.tv_sec * 1000000000ULL + curr.tv_nsec;
+        ns *= abortSize;
         latencies.push_back(ns);
       }
     }

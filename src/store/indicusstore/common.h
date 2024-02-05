@@ -133,6 +133,10 @@ void SignBatchedMessage(const std::vector<::google::protobuf::Message*>& msgs,
     crypto::PrivKey* privateKey, uint64_t processId,
     const std::vector<proto::SignedMessage*>& signedMessages);
 
+void SignBatchedReadMessage(const std::vector<::google::protobuf::Message*>& msgs,
+    crypto::PrivKey* privateKey, uint64_t processId,
+    const std::vector<proto::SignedMessage*>& signedMessages);
+
 void* asyncSignMessage(::google::protobuf::Message* msg,
     crypto::PrivKey* privateKey, uint64_t processId,
     proto::SignedMessage *signedMessage);

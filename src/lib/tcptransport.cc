@@ -746,11 +746,8 @@ TCPTransport::SendMessageInternal_batch(TransportReceiver *src,
                                   const TCPTransportAddress &dst,
                                   const std::vector<Message *> &m_list)
 {  
-    Debug("SendMessageInternal_batch start\n");
 
     int message_size = m_list.size();
-
-    Debug("message_size : %d", message_size);
 
     /*
     for (int i = 0; i < message_size; i++){
@@ -780,6 +777,7 @@ TCPTransport::SendMessageInternal_batch(TransportReceiver *src,
     // maxTotalLenとmaxDataLenを調べる。
     for(int i = 0; i < message_size; i++){
 
+
         string data;
         UW_ASSERT((*m_list[i]).SerializeToString(&data));
         string type = (*m_list[i]).GetTypeName();
@@ -787,24 +785,29 @@ TCPTransport::SendMessageInternal_batch(TransportReceiver *src,
         //printf("typeLen :%d", typeLen);
         size_t dataLen = data.length();
         //printf("dataLen :%d", dataLen);
+        
         if (dataLen > maxDataLen){
+            //printf("change");
             maxDataLen = dataLen;
         }
+        //printf("dataLen :%d\n", dataLen);
         size_t totalLen = (typeLen + sizeof(typeLen) +
                        dataLen + sizeof(dataLen) +
                        sizeof(totalLen) +
                        sizeof(uint32_t));
-       // printf("totalLen :%d", totalLen);
+
+        //printf("totalLen :%d\n", totalLen);
         if (totalLen > maxTotalLen){
+            //printf("change");
             maxTotalLen = totalLen;
         }
-
     }
 
     //buf_batchの雛形を作成
     char buf_batch[message_size][maxTotalLen];
 
     for(int i = 0; i < message_size; ++i){
+
         string data;
         UW_ASSERT((*m_list[i]).SerializeToString(&data));
         string type = (*m_list[i]).GetTypeName();
@@ -847,6 +850,7 @@ TCPTransport::SendMessageInternal_batch(TransportReceiver *src,
         for(int j = 0; j < totalLen; j++){
             buf_batch[i][j] = buf[j];
         }
+
 
     }
 
@@ -1320,6 +1324,7 @@ TCPTransport::TCPReadableCallback(struct bufferevent *bev, void *arg)
 }
 
 
+/*
 void
 TCPTransport::TCPReadableCallback_batch(struct bufferevent *bev, void *arg)
 {   
@@ -1440,13 +1445,12 @@ TCPTransport::TCPReadableCallback_batch(struct bufferevent *bev, void *arg)
          Debug("Done processing large %s message", msgTypes[0].c_str());
     }
 }
+*/
 
-
-/*
 void
 TCPTransport::TCPReadableCallback_batch(struct bufferevent *bev, void *arg)
 {   
-    printf("TCPTransport::TCPReadableCallback_batch begin\n");
+    Debug("TCPTransport::TCPReadableCallback_batch begin\n");
     TCPTransportTCPListener *info = (TCPTransportTCPListener *)arg;
     TCPTransport *transport = info->transport;
     struct evbuffer *evbuf = bufferevent_get_input(bev);
@@ -1466,21 +1470,21 @@ TCPTransport::TCPReadableCallback_batch(struct bufferevent *bev, void *arg)
 
     struct evbuffer_ptr evbuf_ptr;
     if (evbuffer_ptr_set(evbuf, &evbuf_ptr, 0, EVBUFFER_PTR_SET) != 0){
-      printf("Failed to set evbuffer_ptr");
+      Debug("Failed to set evbuffer_ptr");
     }
 
     size_t evbuffer_length = evbuffer_get_length(evbuf);
 
     while (evbuffer_length > 60) {
-        printf("evbuffer_length:%d\n", evbuffer_length);
+        Debug("evbuffer_length:%d\n", evbuffer_length);
         uint32_t *magic;
         magic = (uint32_t *)evbuffer_pullup(evbuf, sizeof(*magic));
         if (magic == NULL) {
-            printf("magic == NULL");
+            Debug("magic == NULL");
             return;
         }
         if (*magic != MAGIC){
-            printf("*magic == MAGIC");
+            Debug("*magic == MAGIC");
             return;
         }
 
@@ -1489,12 +1493,12 @@ TCPTransport::TCPReadableCallback_batch(struct bufferevent *bev, void *arg)
 
         sz = (size_t *) (x + sizeof(*magic));
         if (x == NULL) {
-            printf("x == NULL");
+            Debug("x == NULL");
             return;
         }
         totalSize = *sz;
         if (totalSize >= 1073741826){
-            printf("totalSize >= 1073741826");
+            Debug("totalSize >= 1073741826");
             return;
         }
 
@@ -1517,7 +1521,7 @@ TCPTransport::TCPReadableCallback_batch(struct bufferevent *bev, void *arg)
         msgType = messageType;
         ptr += typeLen;
 
-        printf("msgType, %s\n", msgType.c_str());
+        Debug("msgType, %s\n", msgType.c_str());
 
         size_t msgLen = *((size_t *)ptr);
         ptr += sizeof(size_t);
@@ -1529,12 +1533,12 @@ TCPTransport::TCPReadableCallback_batch(struct bufferevent *bev, void *arg)
         
         if (loop_count != 0 && msgTypes[0] != msgType){
             two_type = true;
-            printf("there are two type \n");
-            printf("msgTypes[0]: %s \n", msgTypes[0].c_str());
-            printf("msgType: %s \n", msgType.c_str());
+            Debug("there are two type \n");
+            Debug("msgTypes[0]: %s \n", msgTypes[0].c_str());
+            Debug("msgType: %s \n", msgType.c_str());
             char buf[typeOneSize];
             evbuffer_remove(evbuf, buf, typeOneSize);
-            printf("typeOneSize: %d \n", typeOneSize);
+            Debug("typeOneSize: %d \n", typeOneSize);
             break;
         }
 
@@ -1542,7 +1546,7 @@ TCPTransport::TCPReadableCallback_batch(struct bufferevent *bev, void *arg)
         msgs.push_back(msg);
 
         if (evbuffer_ptr_set(evbuf, &evbuf_ptr, totalSize, EVBUFFER_PTR_ADD) != 0){
-            printf("Failed to add evbuffer_ptr");
+            Debug("Failed to add evbuffer_ptr");
         }
 
         typeOneSize += totalSize;
@@ -1552,7 +1556,7 @@ TCPTransport::TCPReadableCallback_batch(struct bufferevent *bev, void *arg)
 
     //evbufferに完璧なデータが入っていなかったら、evbufferには何の修正も入れずにreturnする
     if (evbuffer_get_length(evbuf) % totalSize != 0 && two_type == false){
-        printf("evbuffer_get_length(evbuf) % totalSize != 0 && two_type == false\n");
+        Debug("evbuffer_get_length(evbuf) % totalSize != 0 && two_type == false\n");
         return;
     }
 
@@ -1561,11 +1565,11 @@ TCPTransport::TCPReadableCallback_batch(struct bufferevent *bev, void *arg)
             uint32_t *magic;
             magic = (uint32_t *)evbuffer_pullup(evbuf, sizeof(*magic));
             if (magic == NULL) {
-                printf("magic == NULL");
+                Debug("magic == NULL");
                 break;
             }
             if (*magic != MAGIC){
-                printf("*magic == MAGIC");
+                Debug("*magic == MAGIC");
                 return;
             }
 
@@ -1574,26 +1578,26 @@ TCPTransport::TCPReadableCallback_batch(struct bufferevent *bev, void *arg)
 
             sz = (size_t *) (x + sizeof(*magic));
             if (x == NULL) {
-                printf("x == NULL");
+                Debug("x == NULL");
                 break;
             }
             totalSize = *sz;
             if (totalSize >= 1073741826){
-                printf("totalSize >= 1073741826");
+                Debug("totalSize >= 1073741826");
                 return;
             }
 
             //ここの部分はコメントアウトする
             if (evbuffer_get_length(evbuf) % totalSize != 0){
-                printf("evbuffer_get_length(evbuf) percentage totalSize != 0");
+                Debug("evbuffer_get_length(evbuf) percentage totalSize != 0");
                 break;
             }
             
 
             if (evbuffer_get_length(evbuf) < totalSize) {
-                printf("evbuffer_get_length(evbuf) : %d\n", evbuffer_get_length(evbuf));
-                printf("totalSize: %d\n", totalSize);
-                printf("evbuffer_get_length(evbuf) < totalSize");
+                Debug("evbuffer_get_length(evbuf) : %d\n", evbuffer_get_length(evbuf));
+                Debug("totalSize: %d\n", totalSize);
+                Debug("evbuffer_get_length(evbuf) < totalSize");
                 //printf("Don't have %ld bytes for a message yet, only %ld",
                 //      totalSize, evbuffer_get_length(evbuf));
                 return;
@@ -1645,13 +1649,12 @@ TCPTransport::TCPReadableCallback_batch(struct bufferevent *bev, void *arg)
     } else {
          // Dispatch //ここでメッセージを受け取っている ReceiveMessage → ReceiveMessageInternal
          transport->mtx.unlock_shared();
-         printf("Received %lu bytes %s message.\n", totalSize, msgType.c_str());
+         Debug("Received %lu bytes %s message.\n", totalSize, msgType.c_str());
          //ここがserver->ReceiveMessageを呼び出している。
          info->receiver->ReceiveMessage_batch(ad, msgTypes, msgs, nullptr);
          // printf("Done processing large %s message", msgType.c_str());
     }
 }
-*/
 
 
 

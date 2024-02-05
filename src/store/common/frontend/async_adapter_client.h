@@ -40,7 +40,7 @@ class AsyncAdapterClient : public AsyncClient {
 
   virtual void Execute_ycsb(AsyncTransaction *txn, execute_callback ecb, bool retry = false);
 
-  virtual void Execute_batch(AsyncTransaction *txn, execute_callback_batch ecb, bool retry = false);
+  virtual void Execute_batch(AsyncTransaction *txn, execute_big_callback ecb, bool retry = false);
 
  private:
   void ExecuteNextOperation();
@@ -55,6 +55,7 @@ class AsyncAdapterClient : public AsyncClient {
   void PutCallback_ycsb(int status, const std::string &key, const std::string &val, Xoroshiro128Plus &rnd, FastZipf &zipf);
   void PutTimeout(int status, const std::string &key, const std::string &val);
   void CommitCallback(transaction_status_t result);
+  void CommitBigCallback(transaction_status_t result);
   void CommitTimeout();
   void AbortCallback();
   void AbortTimeout();
@@ -72,8 +73,6 @@ class AsyncAdapterClient : public AsyncClient {
   int putCbCount = 0;
   int getCbCount = 0;
   int commitCbCount = 0;
-  bool readwrite = false;
-  bool writeread = false;
   std::vector<transaction_status_t> results;
   std::multimap<std::string, int> keyTxMap;
   std::vector<std::pair<int, std::vector<Operation>>> txNum_writeSet;
@@ -84,6 +83,7 @@ class AsyncAdapterClient : public AsyncClient {
   size_t finishedOpCount;
   std::map<std::string, std::string> readValues;
   execute_callback currEcb;
+  execute_big_callback currEcbcb;
   execute_callback_batch currEcbb;
   AsyncTransaction *currTxn;
 
@@ -96,12 +96,15 @@ class AsyncAdapterClient : public AsyncClient {
   std::vector<Operation> pre_write_set;
   std::vector<Operation> conflict_write_set;
   std::vector<std::vector<Operation>> abort_set;
+  uint64_t batch_size;
 
   std::vector<std::string> key_list;
 
   std::vector<get_callback> gcb_list;
 
   bool wait_flag;
+  bool writeread = false;
+  bool readwrite = false;
 
   void PutCallback_batch(int status, const std::string &key,
     const std::string &val);
