@@ -1324,7 +1324,7 @@ TCPTransport::TCPReadableCallback(struct bufferevent *bev, void *arg)
 }
 
 
-/*
+
 void
 TCPTransport::TCPReadableCallback_batch(struct bufferevent *bev, void *arg)
 {   
@@ -1445,8 +1445,9 @@ TCPTransport::TCPReadableCallback_batch(struct bufferevent *bev, void *arg)
          Debug("Done processing large %s message", msgTypes[0].c_str());
     }
 }
-*/
 
+
+/*
 void
 TCPTransport::TCPReadableCallback_batch(struct bufferevent *bev, void *arg)
 {   
@@ -1655,7 +1656,7 @@ TCPTransport::TCPReadableCallback_batch(struct bufferevent *bev, void *arg)
          // printf("Done processing large %s message", msgType.c_str());
     }
 }
-
+*/
 
 
 void
