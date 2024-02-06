@@ -127,7 +127,7 @@ void AsyncAdapterClient::MakeTransaction_no_abort(uint64_t txNum, uint64_t txSiz
     }
 
     if (thisTxWrite != 0){
-      ExecuteWriteOperation(tx_num, pre_write_set);
+      ExecuteWriteOperation();
       thisTxWrite == 0;
     }
 
@@ -176,7 +176,7 @@ void AsyncAdapterClient::MakeTransaction_no_abort(uint64_t txNum, uint64_t txSiz
     }
 
     if (thisTxWrite != 0){
-      ExecuteWriteOperation(tx_num, pre_write_set);
+      ExecuteWriteOperation();
       thisTxWrite == 0;
     }
 
@@ -235,7 +235,7 @@ void AsyncAdapterClient::MakeTransaction_single_abort(uint64_t txNum, uint64_t t
       writeOpNum++;
     }
     if (conflict_write_set.size() != 0){
-        ExecuteWriteOperation(txNum, conflict_write_set);
+        ExecuteWriteOperation();
         conflict_write_set.clear();
     }
     pre_write_set.clear();
@@ -528,7 +528,7 @@ MAKE_TX_FIN:
     //writeを先に行う // 通常
     for (auto itr = txNum_writeSet.begin(); itr != txNum_writeSet.begin(); ++itr){
       for (int i = 0; i < (itr->second).size(); i++){
-        ExecuteWriteOperation(itr->first, itr->second);
+        ExecuteWriteOperation();
       }
     }
   }
@@ -820,7 +820,7 @@ void AsyncAdapterClient::MakeTransaction_multi_abort(uint64_t txNum, uint64_t tx
 void AsyncAdapterClient::ExecuteWriteOperation(){
 
   for(auto op = write_set.begin(); op != write_set.end(); ++op){
-    client->Put(op.key, op.value, std::bind(&AsyncAdapterClient::PutCallback,
+    client->Put(op->key, op->value, std::bind(&AsyncAdapterClient::PutCallback_batch,
             this, std::placeholders::_1, std::placeholders::_2,
             std::placeholders::_3), std::bind(&AsyncAdapterClient::PutTimeout,
               this, std::placeholders::_1, std::placeholders::_2,
@@ -975,7 +975,7 @@ void AsyncAdapterClient::GetCallback_batch(int status, const std::string &key,
   getCbCount++;
   if (readOpNum <= getCbCount){
       if (writeOpNum != 0 && readwrite){
-        ExecuteWriteOperation(1, write_set);
+        ExecuteWriteOperation();
       }
       else{
         ExecuteCommit();
