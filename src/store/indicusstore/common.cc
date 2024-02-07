@@ -80,56 +80,6 @@ void SignMessage(::google::protobuf::Message* msg,
       signedMessage->data());
 }
 
-void SignBatchedMessage(const std::vector<::google::protobuf::Message*>& msgs,
-    crypto::PrivKey* privateKey, uint64_t processId,
-    const std::vector<proto::SignedMessage*>& signedMessages) {
-  
-  std::string messages;
-
-  for(int i = 0; i < msgs.size(); i++){
-    if(signedMessages[i]){
-      Debug("signedMessages[%d] exists", i);
-    }
-    else{
-      Debug("signedMessages[%d] was already freed", i);
-    }
-    signedMessages[i]->set_process_id(processId);
-    UW_ASSERT(msgs[i]->SerializeToString(signedMessages[i]->mutable_data()));
-    messages.append(signedMessages[i]->data());
-  }
-
-  //*(signedMessages[0])->mutable_signature() = crypto::Sign(privateKey,messages);
-  
-  std::string signature = crypto::Sign(privateKey,messages);
-  for(int i = 0; i < signedMessages.size(); i++){
-    *(signedMessages[i])->mutable_signature() = signature;
-  }
-}
-
-void SignBatchedReadMessage(const std::vector<::google::protobuf::Message*>& msgs,
-    crypto::PrivKey* privateKey, uint64_t processId,
-    const std::vector<proto::SignedMessage*>& signedMessages) {
-  
-  std::string messages;
-
-  for(int i = 0; i < msgs.size(); i++){
-    signedMessages[i]->set_process_id(processId);
-    UW_ASSERT(msgs[i]->SerializeToString(signedMessages[i]->mutable_data()));
-    messages.append(signedMessages[i]->data());
-    if ((signedMessages[i]->data()).length() != 108){
-      *(signedMessages[i])->mutable_signature() = crypto::Sign(privateKey,signedMessages[i]->data());
-    }
-  }
-
-  std::string signature = crypto::Sign(privateKey,messages);
-  for(int i = 0; i < msgs.size(); i++){
-    if ((*(signedMessages[i])->mutable_signature()).length() == 0){
-      *(signedMessages[i])->mutable_signature() = signature;
-    }
-  }
-  Debug("finish SignBatchedReadMessage");
-}
-
 void* asyncSignMessage(::google::protobuf::Message* msg,
     crypto::PrivKey* privateKey, uint64_t processId,
     proto::SignedMessage *signedMessage) {
@@ -216,8 +166,6 @@ void asyncValidateCommittedConflict(const proto::CommittedProof &proof,
     const transport::Configuration *config, Verifier *verifier,
     mainThreadCallback mcb, Transport *transport, bool multithread, bool batchVerification){
 
-    Debug("asyncValidateCommittedConflict");
-  
     if (!TransactionsConflict(proof.txn(), *txn)) {
       Debug("Committed txn [%lu:%lu][%s] does not conflict with this txn [%lu:%lu][%s].",
           proof.txn().client_id(), proof.txn().client_seq_num(),
@@ -227,12 +175,10 @@ void asyncValidateCommittedConflict(const proto::CommittedProof &proof,
         mcb((void*) false);
         return;
     }
-
     if(signedMessages && multithread){
       asyncValidateCommittedProof(proof, committedTxnDigest,
             keyManager, config, verifier, std::move(mcb), transport, multithread);
     }
-    
     return;
 }
 
@@ -241,9 +187,6 @@ void asyncValidateCommittedProof(const proto::CommittedProof &proof,
     const std::string *committedTxnDigest, KeyManager *keyManager,
     const transport::Configuration *config, Verifier *verifier,
     mainThreadCallback mcb, Transport *transport, bool multithread, bool batchVerification) {
-  
-  Debug("asyncValidateCommittedProof");
-  
   if (proof.txn().client_id() == 0UL && proof.txn().client_seq_num() == 0UL) {
     // TODO: this is unsafe, but a hack so that we can bootstrap a benchmark
     //    without needing to write all existing data with transactions
@@ -253,8 +196,7 @@ void asyncValidateCommittedProof(const proto::CommittedProof &proof,
     mcb((void*) true);
     return;
   }
-  
-  
+
   if (proof.has_p1_sigs()) {
     if(batchVerification){
       asyncBatchValidateP1Replies(proto::COMMIT, true, &proof.txn(), committedTxnDigest,
@@ -284,7 +226,6 @@ void asyncValidateCommittedProof(const proto::CommittedProof &proof,
     mcb((void*) false);
     return;
   }
-
 }
 
 bool ValidateCommittedConflict(const proto::CommittedProof &proof,
@@ -455,13 +396,11 @@ void asyncValidateP1RepliesCallback(asyncVerification* verifyObj, uint32_t group
     verifyObj->tp->IssueCB(std::move(verifyObj->mcb), (void*) true);
   }
 
-  Debug("before verifyObj->deletable == 0");
   if(verifyObj->deletable == 0){
     //verifyObj->deleteMessages();
     if(LocalDispatch) lockScope.unlock();
     delete verifyObj;
   }
-  Debug("after verifyObj->deletable == 0");
   return;
 }
 
@@ -574,7 +513,6 @@ void asyncValidateP1Replies(proto::CommitDecision decision,
     const transport::Configuration *config,
     int64_t myProcessId, proto::ConcurrencyControl::Result myResult, Verifier *verifier,
     mainThreadCallback mcb, Transport *transport, bool multithread) {
-
   proto::ConcurrencyControl concurrencyControl;
   concurrencyControl.Clear();
   *concurrencyControl.mutable_txn_digest() = *txnDigest;
@@ -599,23 +537,22 @@ void asyncValidateP1Replies(proto::CommitDecision decision,
     return; //false; //dont need to return anything
   }
 
-
   //TODO: need to check if all involved groups are included... (for commit)
   // For abort check whether the one group is part of the involved groups.
-  
+
   asyncVerification *verifyObj = new asyncVerification(quorumSize, std::move(mcb), txn->involved_groups_size(), decision, transport);
+  std::unique_lock<std::mutex> lock(verifyObj->objMutex);
 
   std::vector<std::pair<std::function<void*()>,std::function<void(void*)>>> verificationJobs;
   std::vector<std::function<void*()>> verificationJobs2;
   std::vector<std::function<void*()> *> verificationJobs3;
-  
 
   int no_of_groups = 0;
 
   for (const auto &sigs : groupedSigs.grouped_sigs()) {
     //only need to verify a single group for Abort decisions.
     if(decision == proto::ABORT && no_of_groups > 0) {
-      Panic("stopping at ABort group break");
+      //Panic("stopping at ABort group break");
       break;
     }
     no_of_groups++;
@@ -640,7 +577,6 @@ void asyncValidateP1Replies(proto::CommitDecision decision,
         //std::lock_guard<std::mutex> lock(verifyObj->objMutex);
         //verifyObj->terminate = true;
         //}
-        std::unique_lock<std::mutex> lock(verifyObj->objMutex);
         verifyObj->mcb((void*) false);
         delete verifyObj;
         return;
@@ -656,7 +592,6 @@ void asyncValidateP1Replies(proto::CommitDecision decision,
         //std::lock_guard<std::mutex> lock(verifyObj->objMutex);
         //verifyObj->terminate = true;
         //}
-        std::unique_lock<std::mutex> lock(verifyObj->objMutex);
         verifyObj->mcb((void*) false);
         delete verifyObj;
         return;
@@ -679,13 +614,10 @@ void asyncValidateP1Replies(proto::CommitDecision decision,
               if (verifyObj->decision == proto::COMMIT) {
                 if(verifyObj->groupsVerified == verifyObj->groupTotals){
                   if(!LocalDispatch){
-                    Debug("!LocalDispatch");
-                    std::unique_lock<std::mutex> lock(verifyObj->objMutex);
                     verifyObj->mcb((void*) true);
                   }
                   else{
                     Debug("Issuing MCB to be scheduled as mainthread event ");
-                    std::unique_lock<std::mutex> lock(verifyObj->objMutex);
                     verifyObj->tp->IssueCB(std::move(verifyObj->mcb), (void*) true);
                   }
                   delete verifyObj;
@@ -694,12 +626,10 @@ void asyncValidateP1Replies(proto::CommitDecision decision,
               }
               else{ //Abort only needs 1 group.
                 if(!LocalDispatch){
-                  std::unique_lock<std::mutex> lock(verifyObj->objMutex);
                   verifyObj->mcb((void*) true);
                 }
                 else{
                   Debug("Issuing MCB to be scheduled as mainthread event ");
-                  std::unique_lock<std::mutex> lock(verifyObj->objMutex);
                   verifyObj->tp->IssueCB(std::move(verifyObj->mcb), (void*) true);
                 }
                 delete verifyObj;
@@ -712,7 +642,6 @@ void asyncValidateP1Replies(proto::CommitDecision decision,
               concurrencyControl.ccr(), sig.process_id(), myProcessId, myResult);
           std::cerr << "stored CCR[" <<  myResult << "] does not match signed CCR[ " << concurrencyControl.ccr() << "] for txn " << BytesToHex(*txnDigest, 64) << std::endl;
           Panic("Aborting due to mismatch");
-          std::unique_lock<std::mutex> lock(verifyObj->objMutex);
           verifyObj->mcb((void*) false);
           delete verifyObj;
           return;
@@ -739,8 +668,6 @@ void asyncValidateP1Replies(proto::CommitDecision decision,
         return (void*) res;
       });
 
-      
-
       //std::function<void*()> f(std::bind(BoolPointerWrapper, std::move(func)));
       //turn into void* function in order to dispatch
       //std::function<void*()> f(std::bind(pointerWrapper<bool>, std::move(func)));
@@ -762,7 +689,6 @@ void asyncValidateP1Replies(proto::CommitDecision decision,
   for (std::function<void*()>* f : verificationJobs3){
     transport->DispatchTP_noCB_ptr(f);
   }
-
 
   // for (auto &verification : verificationJobs2){
   //   transport->DispatchTP_noCB(std::move(verification));
@@ -802,7 +728,6 @@ bool ValidateP1Replies(proto::CommitDecision decision,
     const transport::Configuration *config,
     int64_t myProcessId, proto::ConcurrencyControl::Result myResult,
     Latency_t &lat, Verifier *verifier) {
-
   proto::ConcurrencyControl concurrencyControl;
   concurrencyControl.Clear();
   *concurrencyControl.mutable_txn_digest() = *txnDigest;
@@ -852,6 +777,7 @@ bool ValidateP1Replies(proto::CommitDecision decision,
           return false;
         }
       }
+
       Debug("Verifying %lu byte signature from replica %lu in group %lu.",
           sig.signature().size(), sig.process_id(), sigs.first);
       //Latency_Start(&lat);
@@ -1824,7 +1750,6 @@ bool ValidateDependency(const proto::Dependency &dep,
     const transport::Configuration *config, uint64_t readDepSize,
     KeyManager *keyManager, Verifier *verifier) {
   if (dep.write_sigs().sigs_size() < readDepSize) {
-    Debug("dep.write_sigs().sigs_size() < readDepSize\n");
     return false;
   }
 
@@ -1833,7 +1758,6 @@ bool ValidateDependency(const proto::Dependency &dep,
   for (const auto &sig : dep.write_sigs().sigs()) {
     if (!verifier->Verify(keyManager->GetPublicKey(sig.process_id()), preparedData,
           sig.signature())) {
-          
       return false;
     }
   }
@@ -1975,7 +1899,6 @@ bool IsReplicaInGroup(uint64_t id, uint32_t group,
 }
 
 int64_t GetLogGroup(const proto::Transaction &txn, const std::string &txnDigest) {
-  Debug("GetLogGroup");
   uint8_t groupIdx = txnDigest[0];
   groupIdx = groupIdx % txn.involved_groups_size();
   UW_ASSERT(groupIdx < txn.involved_groups_size());

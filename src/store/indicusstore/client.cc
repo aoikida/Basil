@@ -830,8 +830,6 @@ void Client::Phase1TimeoutCallback(int group, uint64_t txnId, int status) {
 
   Warning("PHASE1[%lu:%lu] group %d timed out.", client_id, txnId, group);
 
-  return;
-
   req->outstandingPhase1s = 0;
   if (params.validateProofs && params.signedMessages) {
     req->slowAbortGroup = -1;
@@ -840,14 +838,7 @@ void Client::Phase1TimeoutCallback(int group, uint64_t txnId, int status) {
     req->decision = proto::COMMIT;
   }
 
-  if (params.batchOptimization){
-    std::vector<PendingRequest *> requests;
-    requests.push_back(req);
-    Phase1_batch(requests);
-  }
-  else{
     Phase1(req);
-  }
   
 
   //TODO:: alternatively upon timeout: just start Phase1FB for ones own TX:
@@ -1079,8 +1070,6 @@ void Client::Phase2TimeoutCallback(int group, uint64_t txnId, int status) {
 
   Warning("PHASE2[%lu:%lu] group %d timed out.", client_id, txnId, group);
   Panic("P2 timing out for txnId: %lu; honest client: %s", txnId, failureActive ? "False" : "True");
-
-  return;
 
   Phase2(req);
 }
