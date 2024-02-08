@@ -564,7 +564,6 @@ void asyncBatchValidateP1Replies(proto::CommitDecision decision, bool fast, cons
   verifier->Complete(multithread, false); //force set to false by default.
 }
 
-//OR: could create a libevent base. Create events for each waiting verification
 void asyncValidateP1Replies(proto::CommitDecision decision,
     bool fast,
     const proto::Transaction *txn,
@@ -574,7 +573,6 @@ void asyncValidateP1Replies(proto::CommitDecision decision,
     const transport::Configuration *config,
     int64_t myProcessId, proto::ConcurrencyControl::Result myResult, Verifier *verifier,
     mainThreadCallback mcb, Transport *transport, bool multithread) {
-
   proto::ConcurrencyControl concurrencyControl;
   concurrencyControl.Clear();
   *concurrencyControl.mutable_txn_digest() = *txnDigest;
@@ -599,23 +597,22 @@ void asyncValidateP1Replies(proto::CommitDecision decision,
     return; //false; //dont need to return anything
   }
 
-
   //TODO: need to check if all involved groups are included... (for commit)
   // For abort check whether the one group is part of the involved groups.
-  
+
   asyncVerification *verifyObj = new asyncVerification(quorumSize, std::move(mcb), txn->involved_groups_size(), decision, transport);
   std::unique_lock<std::mutex> lock(verifyObj->objMutex);
+
   std::vector<std::pair<std::function<void*()>,std::function<void(void*)>>> verificationJobs;
   std::vector<std::function<void*()>> verificationJobs2;
   std::vector<std::function<void*()> *> verificationJobs3;
-  
 
   int no_of_groups = 0;
 
   for (const auto &sigs : groupedSigs.grouped_sigs()) {
     //only need to verify a single group for Abort decisions.
     if(decision == proto::ABORT && no_of_groups > 0) {
-      Panic("stopping at ABort group break");
+      //Panic("stopping at ABort group break");
       break;
     }
     no_of_groups++;
@@ -640,7 +637,6 @@ void asyncValidateP1Replies(proto::CommitDecision decision,
         //std::lock_guard<std::mutex> lock(verifyObj->objMutex);
         //verifyObj->terminate = true;
         //}
-        //std::unique_lock<std::mutex> lock(verifyObj->objMutex);
         verifyObj->mcb((void*) false);
         delete verifyObj;
         return;
@@ -656,7 +652,6 @@ void asyncValidateP1Replies(proto::CommitDecision decision,
         //std::lock_guard<std::mutex> lock(verifyObj->objMutex);
         //verifyObj->terminate = true;
         //}
-        //std::unique_lock<std::mutex> lock(verifyObj->objMutex);
         verifyObj->mcb((void*) false);
         delete verifyObj;
         return;
@@ -679,13 +674,10 @@ void asyncValidateP1Replies(proto::CommitDecision decision,
               if (verifyObj->decision == proto::COMMIT) {
                 if(verifyObj->groupsVerified == verifyObj->groupTotals){
                   if(!LocalDispatch){
-                    Debug("!LocalDispatch");
-                    //std::unique_lock<std::mutex> lock(verifyObj->objMutex);
                     verifyObj->mcb((void*) true);
                   }
                   else{
                     Debug("Issuing MCB to be scheduled as mainthread event ");
-                    //std::unique_lock<std::mutex> lock(verifyObj->objMutex);
                     verifyObj->tp->IssueCB(std::move(verifyObj->mcb), (void*) true);
                   }
                   delete verifyObj;
@@ -694,12 +686,10 @@ void asyncValidateP1Replies(proto::CommitDecision decision,
               }
               else{ //Abort only needs 1 group.
                 if(!LocalDispatch){
-                  //std::unique_lock<std::mutex> lock(verifyObj->objMutex);
                   verifyObj->mcb((void*) true);
                 }
                 else{
                   Debug("Issuing MCB to be scheduled as mainthread event ");
-                  //std::unique_lock<std::mutex> lock(verifyObj->objMutex);
                   verifyObj->tp->IssueCB(std::move(verifyObj->mcb), (void*) true);
                 }
                 delete verifyObj;
@@ -712,7 +702,6 @@ void asyncValidateP1Replies(proto::CommitDecision decision,
               concurrencyControl.ccr(), sig.process_id(), myProcessId, myResult);
           std::cerr << "stored CCR[" <<  myResult << "] does not match signed CCR[ " << concurrencyControl.ccr() << "] for txn " << BytesToHex(*txnDigest, 64) << std::endl;
           Panic("Aborting due to mismatch");
-          //std::unique_lock<std::mutex> lock(verifyObj->objMutex);
           verifyObj->mcb((void*) false);
           delete verifyObj;
           return;
@@ -739,8 +728,6 @@ void asyncValidateP1Replies(proto::CommitDecision decision,
         return (void*) res;
       });
 
-      
-
       //std::function<void*()> f(std::bind(BoolPointerWrapper, std::move(func)));
       //turn into void* function in order to dispatch
       //std::function<void*()> f(std::bind(pointerWrapper<bool>, std::move(func)));
@@ -762,7 +749,6 @@ void asyncValidateP1Replies(proto::CommitDecision decision,
   for (std::function<void*()>* f : verificationJobs3){
     transport->DispatchTP_noCB_ptr(f);
   }
-
 
   // for (auto &verification : verificationJobs2){
   //   transport->DispatchTP_noCB(std::move(verification));
